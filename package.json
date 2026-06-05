@@ -1,0 +1,30 @@
+{
+  "name": "soop-chat",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "unjongjjing",
+  "type": "module",
+  "main": "src/soop/index.js",
+  "exports": {
+    ".": "./src/soop/index.js",
+    "./soop/*": "./src/soop/*.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "imports": {
+    "#soop/*": "./src/soop/*.js",
+    "#utils/*": "./src/utils/*.js"
+  },
+  "files": [
+    "src/soop",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

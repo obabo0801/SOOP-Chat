@@ -1,0 +1,15 @@
+{
+    "bjId": "BJID",
+    "cookie": "",
+    "broadPw": "BROADPW",
+
+    "isLink": true,
+    "isList": false,
+    "pver": 2,
+    "subtitle": 0,
+    "mode": 0,
+
+    "userId": "USERID",
+    "password": "PASSWORD",
+    "secondPw": "SECONDPW"
+}
