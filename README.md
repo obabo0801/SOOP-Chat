@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-green">
   <img src="https://img.shields.io/badge/node.js-24.16.0-brightgreen">
-  <img src="https://img.shields.io/badge/version-v1.0.0-blue">
+  <img src="https://img.shields.io/badge/version-v1.0.1-blue">
   <img src="https://img.shields.io/badge/status-experimental-orange">
 </p>
 
@@ -29,8 +29,29 @@ git@github.com:obabo0801/SOOP-Chat.git
 
 ---
 
+<details>
+<summary>❗ 업데이트 내역</summary>
+
+## ❗ 버전 1.0.1
+- 방송 자동 대기 기능 추가
+- 방송 상태 안내 메시지 추가
+  - 오프라인, 비밀번호, 연령 제한, 플러스 구독
+- Bridge 인증 흐름 개선
+  - 비밀번호 방송 연결 실패 처리
+  - 실패 시 Timeout 문제 수정
+  - Bridge 인증 성공 후 Chat 연결
+- 스트리머 새 게시글 알림 추가
+- 방송 입장 로그와 채팅 참여 로그 분리
+- 도전미션 목록 조회 추가
+- 대결미션 결과 알림 개선
+  - 승리 팀 / 무승부 처리 분리
+
+</details>
+
+---
+
 ## 📌 소개
-SOOP Live 채팅 구조를 직접 분석하면서 만든  
+SOOP Live 채팅 구조를 분석하면서 만든  
 Node.js 기반 채팅 클라이언트입니다.
 
 공식 라이브러리는 아니며, 개발용으로 사용합니다.
@@ -42,12 +63,14 @@ Node.js 기반 채팅 클라이언트입니다.
 ## ✨ 기능
 - Chat WebSocket 방송 채팅 연결
 - Bridge WebSocket 방송 정보 수신
+- 방송 대기 및 자동 접속
 - 방송 제목, 카테고리, 태그 변경 알림
 - 일반 채팅, 매니저 채팅, 귓속말 수신
 - 참여자 목록 및 입퇴장 처리
 - 별풍선, 스티커, 애드벌룬 선물 알림
 - 구독권, 퀵뷰, OGQ 선물 알림
 - 투표, 도전·대결미션, 자막 이벤트 처리
+- 스트리머 새 게시글 알림
 - 로그인, 2차 로그인, 로그아웃 지원
 - 콘솔 명령어 테스트 지원
 
@@ -70,7 +93,7 @@ const client = new SoopClient({
 });
 
 client.on('chat', data => {
-    console.log(`${data.userName}: ${data.message}`);
+    console.log(`${data.userNick}: ${data.message}`);
 });
 
 await client.connect();
@@ -120,6 +143,8 @@ SECONDPW="YOUR_SECONDPW"
 | --- | --- |
 | `bjId` | 방송 스트리머 아이디 |
 | `broadPw` | 방송 비밀번호 |
+| `auto` | 방송 대기 연결 |
+| `delay` | 자동 대기 연결 시간 |
 | `cookie` | 로그인 쿠키 .A32··· |
 | `isLink` | 이모티콘 링크 표시 |
 | `isList` | 참여자 목록 표시 |
@@ -131,6 +156,7 @@ SECONDPW="YOUR_SECONDPW"
 
 | 명령어 | 설명 |
 | --- | --- |
+| `/내정보` | 내정보 확인 |
 | `/조회 아이디` | 방송 상태 확인 |
 | `/연결 아이디` | 방송 채팅 연결 |
 | `/연결해제` | 현재 연결 해제 |

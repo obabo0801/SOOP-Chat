@@ -6,7 +6,7 @@ export function format(ms) {
     const min = Math.floor(
         (total % 3600) / 60);
     const sec = total % 60;
-    return { hour, min, sec }
+    return { hour, min, sec };
 }
 
 export function pad(n) {

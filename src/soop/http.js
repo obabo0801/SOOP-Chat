@@ -79,11 +79,7 @@ export async function postLiveInfo(bjId, options = {}) {
         body
     });
 
-    const channel = json?.CHANNEL;
-
-    if (channel.RESULT === 1) {
-        return channel;
-    }
+    return json?.CHANNEL;
 }
 
 export async function getPrivateInfo(options = {}) {
@@ -191,6 +187,42 @@ export async function getSection(bjId, chip, options = {}) {
         + `/home/section/${chip}`,
         DOMAIN.channel
     );
+
+    const json = await requestJson(url, {
+        ...options,
+        method: 'GET'
+    });
+
+    return json;
+}
+
+export async function getBoard(bjId, {
+    page = 1,
+    perPage = 20,
+    startDate = '',
+    endDate = '',
+    field = 'title,contents,user_nick,user_id,hashtags',
+    keyword = '',
+    type = 'all',
+    orderBy = 'reg_date',
+    boardNumber = '',
+} = {},
+    options = {}
+) {
+    const url = new URL(
+        `/api/${encodeURIComponent(bjId)}/board/`,
+        DOMAIN.chapi
+    );
+
+    url.searchParams.set('per_page', perPage);
+    url.searchParams.set('start_date', startDate);
+    url.searchParams.set('end_date', endDate);
+    url.searchParams.set('field', field);
+    url.searchParams.set('keyword', keyword);
+    url.searchParams.set('type', type);
+    url.searchParams.set('order_by', orderBy);
+    url.searchParams.set('board_number', boardNumber);
+    url.searchParams.set('page', page);
 
     const json = await requestJson(url, {
         ...options,
@@ -436,6 +468,35 @@ export async function postOgqChat(
     });
 
     const json = await requestJson(url, {
+        ...options,
+        method: 'POST',
+        body
+    });
+
+    return json;
+}
+
+export async function postChallenge(bjId, options = {}) {
+    const url = new URL(
+        '/api/challenge_funding_api.php',
+        DOMAIN.live
+    );
+
+    const status = [
+        "REQUEST",
+        "PROGRESS",
+        "SUCCESS",
+        "FAIL",
+        "CANCEL"
+    ];
+
+    const body = new URLSearchParams({
+        szWork: 'getChallengeFunding',
+        szBjId: bjId,
+        szStatus: JSON.stringify(status)
+    });
+
+    const json =  await requestJson(url, {
         ...options,
         method: 'POST',
         body

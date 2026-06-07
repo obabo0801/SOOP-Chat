@@ -24,10 +24,6 @@ export function dispatch(soop, pkt) {
         soop.sendJoinChannel(
             soop.broadPw
         );
-
-        if (soop.rule) {
-            soop.emit('rule', soop.rule);
-        }
         break;
     }
 
@@ -35,6 +31,8 @@ export function dispatch(soop, pkt) {
     case SVC.JOIN_CHANNEL: {
         if (error(fields, 2)) {
             soop.emit('error', fields[0]);
+            soop.broadPw = null;
+            soop.disconnect(false);
             break;
         }
 
@@ -46,10 +44,14 @@ export function dispatch(soop, pkt) {
 
         soop.emit('join', {
             userId: soop.channel?.USERID,
-            userName: soop.channel?.UNICK,
+            userNick: soop.channel?.UNICK,
             userFlag: soop.userFlag,
             ...userInfo(soop, soop.userFlag)
         });
+
+        if (soop.rule) {
+            soop.emit('rule', soop.rule);
+        }
         break;
     }
 
@@ -58,7 +60,7 @@ export function dispatch(soop, pkt) {
         soop.emit('quit', {
             type: Number(fields[2]),
             count: Number(fields[3]),
-            adminName: fields[4]
+            adminNick: fields[4]
         });
 
         soop.disconnect();
@@ -77,7 +79,7 @@ export function dispatch(soop, pkt) {
             count: Number(fields[3]),
             adminId: fields[4],
             userId: fields[0],
-            userName: fields[7],
+            userNick: fields[7],
             userFlag: fields[1],
             ...userInfo(
                 soop, fields[1]
@@ -118,7 +120,7 @@ export function dispatch(soop, pkt) {
         soop.emit('chat', {
             message: fields[0],
             userId: fields[1],
-            userName: fields[5],
+            userNick: fields[5],
             subMonth: Number(fields[7]),
             userFlag: fields[6],
             ...userInfo(
@@ -149,8 +151,8 @@ export function dispatch(soop, pkt) {
             toId,
             fromId,
             type,
-            fromName: fields[5],
-            toName: fields[6],
+            fromNick: fields[5],
+            toNick: fields[6],
             userFlag: fields[7],
             ...userInfo(
                 soop, fields[7]
@@ -175,7 +177,7 @@ export function dispatch(soop, pkt) {
         soop.emit('userFlag', {
             flag: checkFlag(fields[0]),
             userId: fields[1],
-            userName: fields[2]
+            userNick: fields[2]
         })
         break;
     }
@@ -190,7 +192,7 @@ export function dispatch(soop, pkt) {
         soop.emit('subBj', {
             flag: checkFlag(fields[1]),
             userId: fields[0],
-            userName: fields[3]
+            userNick: fields[3]
         })
         break;
     }
@@ -200,15 +202,15 @@ export function dispatch(soop, pkt) {
         const result = {
             userFlag: checkFlag(fields[3]),
             userId: fields[0],
-            newName: fields[1],
+            newNick: fields[1],
             type: Number(fields[2]),
-            oldName: fields[4]
+            oldNick: fields[4]
         }
 
         const user = soop.userList.get(result.userId);
 
         if (user) {
-            user.name = result.newName;
+            user.name = result.newNick;
         }
 
         soop.emit('nickName', result);
@@ -225,7 +227,7 @@ export function dispatch(soop, pkt) {
         const data = {
             bjId: fields[0],
             userId: fields[1],
-            userName: fields[2],
+            userNick: fields[2],
             count: Number(fields[3]),
             fanOrder: Number(fields[4]),
             fileName: fields[7],
@@ -258,9 +260,9 @@ export function dispatch(soop, pkt) {
     case SVC.SEND_FAN_LETTER: {
         const data = {
             bjId: fields[0],
-            bjName: fields[1],
+            bjNick: fields[1],
             userId: fields[2],
-            userName: fields[3],
+            userNick: fields[3],
             type: Number(fields[5]),
             count: Number(fields[7]),
             supporterOrder: Number(fields[8]),
@@ -312,7 +314,7 @@ export function dispatch(soop, pkt) {
         soop.emit('managerChat', {
             message: fields[0],
             userId: fields[1],
-            userName: fields[4],
+            userNick: fields[4],
             userFlag: fields[5],
             ...userInfo(
                 soop, fields[5]
@@ -326,7 +328,7 @@ export function dispatch(soop, pkt) {
         const data = {
             bjId: fields[1],
             userId: fields[3],
-            userName: fields[4],
+            userNick: fields[4],
             count: Number(fields[5]),
             fanOrder: Number(fields[6]),
             fileName: fields[8],
@@ -347,9 +349,9 @@ export function dispatch(soop, pkt) {
     case SVC.SEND_FAN_LETTER_SUB: {
         const data = {
             bjId: fields[1],
-            bjName: fields[2],
+            bjNick: fields[2],
             userId: fields[3],
-            userName: fields[4],
+            userNick: fields[4],
             type: Number(fields[6]),
             count: Number(fields[8]),
             supporterOrder: Number(fields[9]),
@@ -366,15 +368,20 @@ export function dispatch(soop, pkt) {
         break;
     }
 
+    // 36
+    case SVC.BJ_STICKER_ITEM: {
+        break;
+    }
+
     // 45
     case SVC.SEND_QUICKVIEW: {
         const itemType = Number(fields[5]);
 
         soop.emit('quickview', {
-            senderId: fields[1],
-            senderName: fields[2],
-            receiverId: fields[3],
-            receiverName: fields[4],
+            fromId: fields[1],
+            fromNick: fields[2],
+            toId: fields[3],
+            toNick: fields[4],
             itemType,
             item: QUICKVIEW_TYPE[itemType]
         });
@@ -425,7 +432,7 @@ export function dispatch(soop, pkt) {
         soop.emit('kickCancel', {
             type: Number(fields[0]),
             userId: fields[1],
-            userName: fields[2],
+            userNick: fields[2],
             message: fields[2],
             raw: fields
         });
@@ -447,7 +454,7 @@ export function dispatch(soop, pkt) {
         const data = {
             bjId: fields[0],
             userId: fields[1],
-            userName: fields[2],
+            userNick: fields[2],
             count: Number(fields[3]),
             fileName: fields[4],
             isDefault: Number(fields[5]) === 1,
@@ -469,7 +476,7 @@ export function dispatch(soop, pkt) {
         soop.emit('adcon', {
             bjId: fields[1],
             userId: fields[2],
-            userName: fields[3],
+            userNick: fields[3],
             count: Number(
                 fields[9]
             ),
@@ -495,9 +502,6 @@ export function dispatch(soop, pkt) {
 
     // 90
     case SVC.KICK_MSG_STATE: {
-        soop.emit('kickState', {
-            index: Number(fields[1])
-        });
         break;
     }
 
@@ -515,7 +519,7 @@ export function dispatch(soop, pkt) {
         soop.emit('follow', {
             bjId: fields[1],
             userId: fields[2],
-            userName: fields[3],
+            userNick: fields[3],
             month,
             tier,
             tierName: tierName(soop, tier),
@@ -543,7 +547,7 @@ export function dispatch(soop, pkt) {
         soop.emit('followEffect', {
             bjId: fields[0],
             userId: fields[1],
-            userName: fields[2],
+            userNick: fields[2],
             month,
             accMonth: Number(fields[6]),
             tier,
@@ -555,9 +559,6 @@ export function dispatch(soop, pkt) {
 
     // 94
     case SVC.TRANSLATION_STATE: {
-        soop.emit('translationState', {
-            index: Number(fields[0])
-        });
         break;
     }
 
@@ -590,7 +591,7 @@ export function dispatch(soop, pkt) {
         soop.emit('vodAdcon', {
             bjId: fields[0],
             userId: fields[1],
-            userName: fields[2],
+            userNick: fields[2],
             message: fields[5],
             count: Number(fields[3]),
             imageUrl: url
@@ -622,7 +623,7 @@ export function dispatch(soop, pkt) {
         soop.emit('videoBalloon', {
             bjId: fields[1],
             userId: fields[2],
-            userName: fields[3],
+            userNick: fields[3],
             count: Number(fields[4]),
             fanOrder: Number(fields[5]),
             topFan: Number(fields[7]),
@@ -639,7 +640,7 @@ export function dispatch(soop, pkt) {
         soop.emit('stationAdcon', {
             bjId: fields[0],
             userId: fields[1],
-            userName: fields[2],
+            userNick: fields[2],
             count: Number(fields[3]),
             imageUrl: url,
         });
@@ -654,24 +655,24 @@ export function dispatch(soop, pkt) {
 
         if (!item) {
             soop.emit('subscription', {
-                senderId: fields[1],
-                senderName: fields[2],
-                receiverId: fields[3],
-                receiverName: fields[4],
+                fromId: fields[1],
+                fromNick: fields[2],
+                toId: fields[3],
+                toNick: fields[4],
                 bjId: fields[5],
-                bjName: fields[6],
+                bjNick: fields[6],
                 itemType
             });
             break;
         }
 
         soop.emit('subscription', {
-            senderId: fields[1],
-            senderName: fields[2],
-            receiverId: fields[3],
-            receiverName: fields[4],
+            fromId: fields[1],
+            fromNick: fields[2],
+            toId: fields[3],
+            toNick: fields[4],
             bjId: fields[5],
-            bjName: fields[6],
+            bjNick: fields[6],
             itemType,
             item,
             tier: item.tier,
@@ -703,7 +704,7 @@ export function dispatch(soop, pkt) {
             imageUrl: url.href,
 
             userId: fields[5],
-            userName: fields[6],
+            userNick: fields[6],
             userFlag: fields[7],
             ...userInfo(
                 soop, fields[7]
@@ -728,8 +729,8 @@ export function dispatch(soop, pkt) {
     // 118
     case SVC.OGQ_EMOTICON_GIFT: {
         soop.emit('ogqGift', {
-            senderId: fields[1],
-            senderName: fields[2],
+            fromId: fields[1],
+            fromNick: fields[2],
             receivedId: fields[3],
             receivedName: fields[4],
             title: fields[5],
@@ -819,7 +820,7 @@ export function dispatch(soop, pkt) {
         soop.emit('subCeremony', {
             bjId: fields[1],
             userId: fields[2],
-            userName: fields[3],
+            userNick: fields[3],
             month: Number(fields[4])
         });
         break;
@@ -1032,10 +1033,10 @@ export function kickList(soop, fields = []) {
 
         const kick = {
             userId,
-            userName: fields[i + 1],
+            userNick: fields[i + 1],
             date: fields[i + 2],
             adminId: fields[i + 3],
-            adminName: fields[i + 4],
+            adminNick: fields[i + 4],
             flag: fields[i + 5],
             ...userInfo(
                 soop, fields[i + 5]
@@ -1242,5 +1243,5 @@ export function parseMonth(value = '') {
     return {
         fw: fw > 0 ? fw : 0,
         afw: afw > 0 ? afw : 0
-    }
+    };
 }
