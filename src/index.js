@@ -19,13 +19,19 @@ let client, isLink, isList, mode;
     loadConfig();
 
     // 방송 스트리머 아이디
-    const bjId = getConfig('bjId') ?? '';
+    const bjId = getConfig('bjId');
 
     // 방송 비밀번호
-    const broadPw = getConfig('broadPw') ?? '';
+    const broadPw = getConfig('broadPw');
+
+    // 방송 대기 연결
+    // true: 방송 대기하다가 방송이 켜지면 자동 접속
+    // 방송 종료 후에도 다시 방송이 켜질 때까지 대기
+    // false: 자동 대기를 사용하지 않고 직접 연결
+    const auto = getConfig('auto');
 
     // 필요하면 브라우저 쿠키 넣기
-    const cookie = getConfig('cookie') ?? '';
+    const cookie = getConfig('cookie');
 
     // 이모티콘 링크 표시
     isLink = getConfig('isLink') ?? true;
@@ -37,20 +43,22 @@ let client, isLink, isList, mode;
     // 0: 참여자 목록 표시, 입장/퇴장 모두 표시
     // 1: 입장/퇴장 모두 표시
     // 2: 입장/퇴장 열혈 이상 표시
-    const pver = getConfig('pver') ?? 2;
+    const pver = getConfig('pver');
 
     // 자막이 허용된 방송에서 자막 표시
     // (-1: 끄기 / 0: 한국어 / 1: English)
-    const subtitle = getConfig('subtitle') ?? 0;
+    const subtitle = getConfig('subtitle');
 
     // 채팅 로그 범위
     // 0 = 전체 채팅
     // 1 = 열혈 이상
     // 2 = 매니저 이상
+    // 3 = 스트리머
     mode = getConfig('mode') ?? 0;
 
     client = new SoopClient({
-        bjId, broadPw, pver, subtitle, cookie
+        bjId, broadPw, auto,
+        pver, subtitle, cookie
     });
 
     if (getConfig('userId')) {
@@ -60,6 +68,64 @@ let client, isLink, isList, mode;
             getConfig('secondPw')
         );
     }
+
+    // live
+    client.on('live', data => {
+        let message = '';
+
+        if (!data.bjId) {
+            message = '방송 스트리머 아이디가 설정되어 있지 않습니다.';
+            log.info('[알림]', `\x1b[1m${message}\x1b[0m`);
+            return;
+        }
+
+        switch (data.code) {
+        case 3:
+            message = `${data.bjNick}(${data.bjId})님 방송은 오프라인입니다.`;
+            break;
+
+        case 2:
+            message = `${data.bjNick}(${data.bjId})님 방송은 비밀번호 입력 후 입장이 가능합니다.`;
+            break;
+
+        case 1:
+            message = `${data.bjNick}(${data.bjId})님 방송에 연결을 시도합니다.`;
+            break;
+
+        case 0:
+            message = `${data.bjNick}(${data.bjId})님 방송에 연결 대기 중입니다.`;
+            break;
+
+        case -6:
+        case -8:
+            message = `${data.bjNick}(${data.bjId})님 방송은 성인 인증 후 입장할 수 있습니다.`;
+            break;
+
+        case -14:
+            message = `${data.bjNick}(${data.bjId})님 방송은 플러스 구독팬만 참여 가능합니다.`;
+            break;
+        }
+
+        log.info('[알림]', `\x1b[1m${message}\x1b[0m`);
+    });
+
+    client.on('post', data => {
+        if (isLink) { //----------------------------------------------------
+        
+        if (data.url) {
+            log.load('[게시글]', data.url);
+        }
+
+        } //----------------------------------------------------------------
+
+        let message = (
+            `${data.bjNick}님이 새 글을 작성했습니다. | `
+            + `제목: ${data.title} | `
+            + `작성일: ${data.regDate}`
+        );
+
+        log.info('\x1b[94m[알림]\x1b[0m', `\x1b[1m${message}\x1b[0m`);
+    });
 
     // open
     client.on('open', data => {
@@ -77,7 +143,7 @@ let client, isLink, isList, mode;
             message += `태그: ${data.broad.hashtag} | `
         }
 
-        message += `${data.bjName}(${data.bjId})님 방송에 입장하였습니다.`;
+        message += `${data.bjNick}(${data.bjId})님 방송에 입장하였습니다.`;
 
         log.info('[시작]', `\x1b[1m${message}\x1b[0m`);
     });
@@ -87,7 +153,7 @@ let client, isLink, isList, mode;
         let message = '';
 
         if (data.userId) {
-            message = `${data.userName}(${data.userId})님이 대화방에 참여했습니다.`;
+            message = `${data.userNick}(${data.userId})님이 대화방에 참여했습니다.`;
         } else {
             message = `비로그인 사용자가 대화방에 참여했습니다.`;
         }
@@ -136,7 +202,7 @@ let client, isLink, isList, mode;
             break;
         
         default:
-            message = `${data.adminName}에 의해 강제퇴장 되었습니다.`;
+            message = `${data.adminNick}에 의해 강제퇴장 되었습니다.`;
             break;
         }
 
@@ -148,7 +214,8 @@ let client, isLink, isList, mode;
         let message = '';
 
         if (data.count > 2) {
-            message = ('님이 채팅금지 횟수 초과로 블라인드 처리 되었습니다. '
+            message = (
+                '님이 채팅금지 횟수 초과로 블라인드 처리 되었습니다. '
                 + `${data.count}초 동안 채팅과 방송화면을 볼 수 없습니다.`
             );
         } else {
@@ -158,7 +225,7 @@ let client, isLink, isList, mode;
         const admin = client.userList.get(data.adminId);
         const name = admin ? admin.name : data.adminId;
 
-        log.error('[채금]', `\x1b[1m${data.userName}(${data.userId})${message}`, `(처리자: ${name})\x1b[0m`);
+        log.error('[채금]', `\x1b[1m${data.userNick}(${data.userId})${message}`, `(처리자: ${name})\x1b[0m`);
     });
 
     // userList
@@ -216,7 +283,7 @@ let client, isLink, isList, mode;
 
         if (isLink) { //----------------------------------------------------
 
-        const extras = client.getChatAssets(data);
+        const extras = client.findAssets(data);
 
         for (const item of extras.emoticons) {
             log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
@@ -254,14 +321,14 @@ let client, isLink, isList, mode;
             break;
         }
 
-        log.info('\x1b[94m[채팅]\x1b[0m', badge, `${data.userName}(${data.userId}): ${data.message}`);
+        log.info('\x1b[94m[채팅]\x1b[0m', badge, `${data.userNick}(${data.userId}): ${data.message}`);
     });
 
     // directChat
     client.on('directChat', data => {
         if (isLink) { //----------------------------------------------------
 
-        const extras = client.getChatAssets(data);
+        const extras = client.findAssets(data);
 
         for (const item of extras.emoticons) {
             log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
@@ -276,9 +343,9 @@ let client, isLink, isList, mode;
         let message = '';
 
         if (data.type === 1) {
-            message = `${data.fromName}(${data.fromId})님의 귓말 ${data.message}`;
+            message = `${data.fromNick}(${data.fromId})님의 귓말 ${data.message}`;
         } else {
-            message = `${data.toName}(${data.toId})님에게 귓말 ${data.message}`;
+            message = `${data.toNick}(${data.toId})님에게 귓말 ${data.message}`;
         }
 
         const badge = data.tier
@@ -292,7 +359,7 @@ let client, isLink, isList, mode;
     client.on('userFlag', data => {
         const flag = data.flag.isBlock ? '거부' : '허용';
 
-        log.debug('[알림]', `${data.userName}(${data.userId})님이 귓속말 ${flag} 하셨습니다.`);
+        log.debug('[알림]', `${data.userNick}(${data.userId})님이 귓속말 ${flag} 하셨습니다.`);
     });
 
     // subBj
@@ -301,12 +368,12 @@ let client, isLink, isList, mode;
             ? '님이 매니저가 되셨습니다.'
             : '님이 매니저에서 해임 되셨습니다.';
 
-        log.allim('[알림]', `\x1b[1m${data.userName}(${data.userId})${message}\x1b[0m`);
+        log.allim('[알림]', `\x1b[1m${data.userNick}(${data.userId})${message}\x1b[0m`);
     });
 
     // nickName
     client.on('nickName', data => {
-        log.debug('[알림]', `${data.oldName}(${data.userId})님이 ${data.newName} 닉네임으로 변경 하셨습니다.`);
+        log.debug('[알림]', `${data.oldNick}(${data.userId})님이 ${data.newNick} 닉네임으로 변경 하셨습니다.`);
     });
 
     // sticker
@@ -317,10 +384,10 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[스티커]', `\x1b[1m${data.userName}(${data.userId})님이 스티커 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[스티커]', `\x1b[1m${data.userNick}(${data.userId})님이 스티커 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.supporterOrder > 0) {
-            log.info('\x1b[38;2;117;170;92m\x1b[1m[서포터]', `${data.userName}님이 ${data.supporterOrder}번째 서포터가 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;117;170;92m\x1b[1m[서포터]', `${data.userNick}님이 ${data.supporterOrder}번째 서포터가 되셨습니다.\x1b[0m`);
         }
     });
 
@@ -362,7 +429,7 @@ let client, isLink, isList, mode;
     client.on('managerChat', data => {
         if (isLink) { //----------------------------------------------------
 
-        const extras = client.getChatAssets(data);
+        const extras = client.findAssets(data);
 
         for (const item of extras.emoticons) {
             log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
@@ -388,7 +455,7 @@ let client, isLink, isList, mode;
             break;
         }
 
-        log.info('\x1b[91m[매니저 채팅]\x1b[0m', `\x1b[1m${badge}`, `${data.userName}(${data.userId}): ${data.message}\x1b[0m`);
+        log.info('\x1b[91m[매니저 채팅]\x1b[0m', `\x1b[1m${badge}`, `${data.userNick}(${data.userId}): ${data.message}\x1b[0m`);
     });
 
     // quickview
@@ -398,8 +465,8 @@ let client, isLink, isList, mode;
             return;
         }
 
-        log.warn(data.item?.plus ? '[퀵뷰 플러스 선물]' : '[퀵뷰 선물]',  `${data.senderName}(${data.senderId})님이`,
-            `${data.receiverName}(${data.receiverId})님에게`, `${data.item.name} ${data.item.days}일권 선물 하셨습니다.`
+        log.warn(data.item?.plus ? '[퀵뷰 플러스 선물]' : '[퀵뷰 선물]',  `${data.fromNick}(${data.fromId})님이`,
+            `${data.toNick}(${data.toId})님에게`, `${data.item.name} ${data.item.days}일권 선물 하셨습니다.`
         );
     });
 
@@ -410,7 +477,6 @@ let client, isLink, isList, mode;
 
         try {
             poll = await client.sendPollList(
-                data.bjId,
                 data.surveyNo
             );
         } catch (error) {
@@ -450,11 +516,13 @@ let client, isLink, isList, mode;
         log.warn('[투표]', `\x1b[1m${message}\x1b[0m`);
 
         if (poll.result !== 1) {
-            log.load(poll.message);
+            log.info(poll.message);
             return;
         }
 
-        const list = (poll.data?.list || [])
+        const list = (
+                poll.data?.list || []
+            )
             .map(item => `${item.answer_no}. ${item.answer_title}. (${item.answer_total}표)`)
             .join('\n');
 
@@ -464,7 +532,7 @@ let client, isLink, isList, mode;
     // banWord
     client.on('banWord', data => {
         if (data.after?.[0]) {
-            log.debug('[알림]', '금칙어가 적용되어있습니다.', `(금칙어: ${data.after.join(', ')} /`, `대체어: ${data.before})`);
+            log.info('[알림]', '금칙어가 적용되어있습니다.', `(금칙어: ${data.after.join(', ')} /`, `대체어: ${data.before})`);
         }
     });
 
@@ -476,9 +544,9 @@ let client, isLink, isList, mode;
     // kickCancel
     client.on('kickCancel', data => {
         if (data.type === 0) {
-            log.debug('[알림]', `${data.userName}(${data.userId})님이 강제퇴장했습니다.`, data.message);
+            log.debug('[알림]', `${data.userNick}(${data.userId})님이 강제퇴장했습니다.`, data.message);
         } else {
-            log.debug('[알림]', `${data.userName}(${data.userId})님의 강제퇴장이 취소되었습니다.`, data.message);
+            log.debug('[알림]', `${data.userNick}(${data.userId})님의 강제퇴장이 취소되었습니다.`, data.message);
         }
     });
 
@@ -492,9 +560,9 @@ let client, isLink, isList, mode;
         log.info('[알림]', '강제퇴장', `총 인원 (${data.length})`,
             '\n──────────────────────────────\n' +
             data.map((item, i) => { return [
-                    `${i + 1}. ${item.userName}(${item.userId})`,
+                    `${i + 1}. ${item.userNick}(${item.userId})`,
                     `   처리 시간: ${item.date}`,
-                    `   처리자: ${item.adminName}(${item.adminId})`
+                    `   처리자: ${item.adminNick}(${item.adminId})`
             ].join('\n') }).join('\n\n')
             + '\n──────────────────────────────\n'
         );
@@ -517,11 +585,12 @@ let client, isLink, isList, mode;
 
         const tier = data.tier === 1 ? '베이직' : '플러스';
 
-        const tierName = (tier !== data.tierName
+        const tierName = (
+            tier !== data.tierName
             ? `${tier} ${data.tierName}` : `${tier}`
         );
 
-        log.warn('[구독]', `\x1b[1m${data.userId}(${data.userName})님이 ${tierName} ${data.month}개월 구독하였습니다.\x1b[0m`);
+        log.warn('[구독]', `\x1b[1m${data.userId}(${data.userNick})님이 ${tierName} ${data.month}개월 구독하였습니다.\x1b[0m`);
     });
 
     // followEffect
@@ -534,11 +603,12 @@ let client, isLink, isList, mode;
 
         const tier = data.tier === 1 ? '베이직' : '플러스';
 
-        const tierName = (tier !== data.tierName
+        const tierName = (
+            tier !== data.tierName
             ? `${tier} ${data.tierName}` : `${tier}`
         );
 
-        log.warn('[연속 구독]', `\x1b[1m${data.userId}(${data.userName})님이 ${tierName} ${data.month}개월째 구독 중입니다. (누적 ${data.accMonth}개월)\x1b[0m`);
+        log.warn('[연속 구독]', `\x1b[1m${data.userId}(${data.userNick})님이 ${tierName} ${data.month}개월째 구독 중입니다. (누적 ${data.accMonth}개월)\x1b[0m`);
     });
 
     // translationState
@@ -569,14 +639,15 @@ let client, isLink, isList, mode;
             return;
         }
 
-        const tierName = (data.item.tierName !== data.tierName
+        const tierName = (
+            data.item.tierName !== data.tierName
             ? `${data.item.tierName} ${data.tierName}`
             : data.item.tierName
         );
 
         log.warn('[구독권 선물]',
-            `\x1b[1m${data.senderName}(${data.senderId})님이 `
-            + `${data.receiverName}(${data.receiverId})님에게 `
+            `\x1b[1m${data.fromNick}(${data.fromId})님이 `
+            + `${data.toNick}(${data.toId})님에게 `
             + `${tierName} ${data.item.month}개월 구독권을 선물 하셨습니다.\x1b[0m`
         );
     });
@@ -617,7 +688,7 @@ let client, isLink, isList, mode;
 
         if (isLink) { //----------------------------------------------------
         
-        const extras = client.getChatAssets(data);
+        const extras = client.findAssets(data);
 
         for (const item of extras.emoticons) {
             log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
@@ -627,13 +698,13 @@ let client, isLink, isList, mode;
             log.load('[구독]', extras.tierUrl);
         }
 
-        log.warn('[OGQ]', badge, `${data.userName}(${data.userId})${message}`, data.imageUrl);
+        log.warn('[OGQ]', badge, `${data.userNick}(${data.userId})${message}`, data.imageUrl);
 
         } //----------------------------------------------------------------
 
         else if (data.message) {
             log.info('\x1b[94m[채팅]\x1b[0m', badge,
-                `${data.userName}(${data.userId})${message}`
+                `${data.userNick}(${data.userId})${message}`
             );
         }
 
@@ -653,8 +724,8 @@ let client, isLink, isList, mode;
         } //----------------------------------------------------------------
 
         log.warn('[OGQ 선물]', 
-            `\x1b[1m${data.senderName}(${data.senderId})님이 `
-            + `${data.receiverName}(${data.receiverId})님에게 `
+            `\x1b[1m${data.fromNick}(${data.fromId})님이 `
+            + `${data.toNick}(${data.toId})님에게 `
             + `${data.title} OGQ 이모티콘을 선물 하셨습니다.\x1b[0m`
         );
 
@@ -682,14 +753,14 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userName}(${data.userId}) 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.fanOrder > 0) {
-            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userName}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
         }
 
         if (data.topFan > 0) {
-            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userName}님이 열혈팬이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userNick}님이 열혈팬이 되셨습니다.\x1b[0m`);
         }
     });
 
@@ -701,14 +772,14 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userName}(${data.userId}) 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.fanOrder > 0) {
-            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userName}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
         }
 
         if (data.topFan > 0) {
-            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userName}님이 열혈팬이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userNick}님이 열혈팬이 되셨습니다.\x1b[0m`);
         }
     });
 
@@ -720,14 +791,14 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[영상 후원]', `]\x1b[1m${data.userName}(${data.userId}) 영상 풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`, data.raw);
+        log.warn('[영상 후원]', `]\x1b[1m${data.userNick}(${data.userId}) 영상 풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`, data.raw);
 
         if (data.fanOrder > 0) {
-            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userName}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
         }
 
         if (data.topFan > 0) {
-            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userName}님이 열혈팬이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userNick}님이 열혈팬이 되셨습니다.\x1b[0m`);
         }
     })
 
@@ -739,7 +810,7 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userName}(${data.userId}) VOD 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) VOD 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
     });
 
     // vodAdcon
@@ -750,14 +821,14 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userName}(${data.userId}) VOD 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) VOD 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.fanOrder === 1) {
-            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userName}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
         }
 
         if (data.topFan === 1) {
-            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userName}님이 열혈팬이 되셨습니다.\x1b[0m`);
+            log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userNick}님이 열혈팬이 되셨습니다.\x1b[0m`);
         }
     });
 
@@ -769,7 +840,7 @@ let client, isLink, isList, mode;
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m방송국에서 ${data.userName}(${data.userId})님이 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `]\x1b[1m방송국에서 ${data.userNick}(${data.userId})님이 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
     });
 
     // challenge
@@ -823,27 +894,31 @@ let client, isLink, isList, mode;
             message = `대결미션으로 별풍선 ${data.settle_count}개 획득했습니다.`;
         }
         
-        else {
-            if (data.mission_status === 'SUCCESS') {
-                message = `[${data.title}] 미션을 성공하였습니다! 스트리머에게 축하의 별풍선을 선물해보세요!`;
+        else if (data.type === 'NOTICE') {
+            if (data.draw) {
+                message = `[${data.title}] 대결미션 결과 무승부입니다! 참여한 스트리머에게 수고의 별풍선을 선물해 보세요.`;
             }
 
-            else if (data.mission_status === 'FAIL') {
-                message = `[${data.title}] 미션을 달성하지 못하였습니다. 다음 도전을 응원해주세요!`;
-            }
-
-            else {
-                message = `[${data.title}] 미션 결과 무승부입니다! 참여한 스트리머에게 수고의 별풍선을 선물해 보세요.`;
+            else if (data.winner) {
+                message = `[${data.title}] 대결미션 승리 팀은 ${data.winner}입니다. 승리 팀의 스트리머에게 축하의 별풍선을 선물해 보세요.`;
             }
         }
 
         log.warn('[후원]', `\x1b[1m${message}\x1b[0m`);
 
-        const mission = await client.sendMissionList(data.bj_id);
+        const mission = await client.sendMissionList();
 
-        if (mission) {
-            log.load(`\x1b[1m${client.formatMission(mission)}\x1b[0m`);
+        if (!mission.ok) {
+            log.warn('[대결미션]', mission.message);
+            return;
         }
+
+        log.load('\x1b[1m' + [
+            `[대결미션] ${mission.title}`,
+            `상태: ${mission.status}`,
+            `총 후원: ${mission.total}개`,
+            `팀:\n${mission.teams}`
+        ].join('\n') + '\x1b[0m');
     });
 
     // missionSettle
@@ -854,19 +929,19 @@ let client, isLink, isList, mode;
 
         for (const item of data.list) {
             const userId = item[0];
-            const userName = item[1];
+            const userNick = item[1];
             const count = item[2];
             const isFanClub = item[3];
             const isTopFan = item[4];
 
             if (isFanClub === 1) {
-                log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${userName}(${userId})님이 ${fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
+                log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${userNick}(${userId})님이 ${fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
 
                 fanOrder++;
             }
 
             if (isTopFan === 1) {
-                log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${userName}님이 열혈팬이 되셨습니다.\x1b[0m`);
+                log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${userNick}님이 열혈팬이 되셨습니다.\x1b[0m`);
             }
         }
     });
@@ -875,7 +950,7 @@ let client, isLink, isList, mode;
 
     // subCeremony
     client.on('subCeremony', data => {
-        log.warn('[구독]', `\x1b[1m${data.userId}(${data.userName})님이 ${data.month}개월 구독중입니다.\x1b[0m`);
+        log.warn('[구독]', `\x1b[1m${data.userId}(${data.userNick})님이 ${data.month}개월 구독중입니다.\x1b[0m`);
     });
 
     // subtitle
@@ -893,11 +968,16 @@ let client, isLink, isList, mode;
             message = '자막 언어 설정이 변경되었습니다.';
         }
 
-        log.debug('[알림]', message, data.lang.label);
+        log.info('[알림]', message, data.lang.label);
     });
 
     // session
     client.on('session', data => {
+        if (!data.login) {
+            log.warn('[세션]', '방송 연령 제한이 설정되어 종료합니다.');
+            return;
+        }
+
         log.warn('[세션]', 
             `방송 세션이 변경되어 재연결합니다.\n`
             + `제목: ${data.after?.TITLE} → ${data.after?.TITLE}\n`
@@ -915,15 +995,20 @@ let client, isLink, isList, mode;
     client.on('close', data => {
         let message = '';
 
+        if (!data.bjId) {
+            return;
+        }
+
         if (data.message) {
-            message = (`종료 메시지: ${data.message}\n`
-                + `${data.bjName}(${data.bjId})님 방송이 종료되었습니다.\n`
+            message = (
+                `종료 메시지: ${data.message}\n`
+                + `${data.bjNick}(${data.bjId})님 방송이 종료되었습니다.\n`
                 + '방송이 종료된 후에는 채팅에 참여하실 수 없습니다.'
             );
         }
 
         else {
-            message = `${data.bjName}(${data.bjId})님 방송을 퇴장하였습니다.`;
+            message = `${data.bjNick}(${data.bjId})님 방송을 퇴장하였습니다.`;
         }
 
         log.info('[종료]', message);
@@ -939,7 +1024,7 @@ let client, isLink, isList, mode;
         });
     });
 
-    await waitBroad(bjId);
+    await client.connect();
 })();
 
 function shutdown() {
@@ -978,37 +1063,8 @@ function getConfig(name) {
     return result;
 }
 
-async function waitBroad(bjId) {
-    if (!bjId) return;
-
-    while (!client.socket) {
-        const info = await http.getStation(bjId);
-
-        if (!info) {
-            return false;
-        }
-
-        const live = await http.postLiveInfo(
-            bjId,
-            { cookie: client.cookie }
-        );
-
-        if (live) {
-            log.info('[알림]', `${info?.station.user_nick}님 방송이 켜졌습니다. 채팅에 접속합니다.`);
-
-            await client.connect(bjId);
-            return true;
-        }
-
-        log.debug('[알림]', `${info?.station.user_nick}님 방송은 오프라인 입니다. 계속 대기 중...`);
-        await client.sleep(100000);
-    }
-
-    return false;
-}
-
 function showChat(data = {}) {
-    const isAdmin = data.isAdmin || data.isAdminChat;
+    const isAdmin = data.isAdmin;
     const isStreamer = data.isBJ;
     const isManager = data.isManager;
     const isTopFan = data.isTopFan;
@@ -1018,14 +1074,27 @@ function showChat(data = {}) {
     }
 
     if (mode === 1) {
-        return isTopFan || isManager || isStreamer || isAdmin;
+        return (isTopFan
+            || isManager
+            || isStreamer
+            || isAdmin
+        );
     }
 
     if (mode === 2) {
-        return isManager || isStreamer || isAdmin;
+        return (isManager
+            || isStreamer
+            || isAdmin
+        );
     }
 
-    return true;
+    if (mode === 3) {
+        return (isStreamer
+            || isAdmin
+        );
+    }
+
+    return false;
 }
 
 async function command(cmd) {
@@ -1035,6 +1104,16 @@ async function command(cmd) {
 
     try {
         switch (name) {
+        case '/내정보':
+        case '/myinfo': {
+            const i = await http.getPrivateInfo({
+                cookie: client.cookie
+            });
+
+            log.info(i);
+            break;
+        }
+
         case '/조회':
         case '/find': {
             const targetId = args[0];
@@ -1047,6 +1126,7 @@ async function command(cmd) {
             const info = await http.getStation(targetId);
 
             if (!info) {
+                log.warn('[조회]', `${targetId}은 검색 결과가 없습니다.`);
                 return false;
             }
 
@@ -1064,6 +1144,28 @@ async function command(cmd) {
             break;
         }
 
+        case '/자동':
+        case '/auto': {
+            const arg = args.join(' ');
+
+            if (arg !== 'true' && arg !== 'false') {
+                log.warn('[명령어]', '/자동 true 또는 false');
+                break;
+            }
+
+            const value = arg === 'true';
+
+            if (client.auto === value) {
+                log.warn('[자동]', `이미 ${client.auto} 으로 되어있습니다.`);
+                break;
+            }
+
+            client.auto = value;
+
+            log.load('[자동]', `자동이 ${client.auto} 으로 설정되었습니다.`);
+            break;
+        }
+
         case '/연결':
         case '/connect': {
             const targetId = args[0];
@@ -1077,27 +1179,38 @@ async function command(cmd) {
             const info = await http.getStation(targetId);
 
             if (!info) {
-                return false;
-            }
-
-            const result = await client.connect(targetId, password);
-
-            if (!result) {
-                log.warn('[연결]', `${info?.station.user_nick}님 방송에 이미 연결중이거나 연결 실패했습니다.`);
+                log.warn('[연결]', `${targetId}은 검색 결과가 없습니다.`);
                 break;
             }
 
-            log.info('[연결]', `${info?.station.user_nick}님 방송 연결 성공했습니다.`);
+            await client.disconnect(false);
+            await client.connect(
+                targetId, password
+            );
+            break;
+        }
+
+        case '/비밀번호':
+        case '/password': {
+            const password = args.join(' ');
+
+            if (!password) {
+                log.warn('[명령어]', '/비밀번호 방송비밀번호');
+                break;
+            }
+
+            client.broadPw = password;
+
+            log.load('[비밀번호]', '방송비밀번호 입력이 완료되었습니다.');
+
+            await client.disconnect(false);
+            await client.connect();
             break;
         }
 
         case '/연결해제':
         case '/disconnect': {
-            const result = await client.disconnect();
-
-            if (!result) {
-                log.warn('[연결해제]', '연결된 방송이 없습니다.');
-            }
+            await client.disconnect();
             break;
         }
 
@@ -1106,6 +1219,11 @@ async function command(cmd) {
             const id = args[0];
             const password = args[1];
             const secondPw = args[2];
+
+            if (client.cookie) {
+                log.warn('[로그인]', '이미 로그인 상태 입니다.');
+                break;
+            }
 
             if (!id || !password) {
                 log.warn('[명령어]', '/로그인 아이디 비밀번호 +2차비밀번호');
@@ -1118,19 +1236,29 @@ async function command(cmd) {
                 secondPw
             );
 
-            if (result !== 1) {
-                log.warn('[로그인]', '등록되지 않은 아이디이거나,', 
+            if (result === -1) {
+                log.error('[로그인]', '등록되지 않은 아이디이거나,', 
                     '아이디 또는 비밀번호를 잘못 입력하셨습니다.'
                 );
                 break;
             }
 
-            const re = await client.disconnect();
+            if (result === -2) {
+                log.error('[로그인]', '2차 비밀번호를 잘못 입력하셨습니다.');
+                break;
+            }
 
-            log.info('[로그인]', '로그인 되었습니다.');
+            const info = await http.getStation(id);
+
+            log.info('[로그인]', 
+                `${info?.station.user_nick}(${info?.station.user_id}) `
+                + '로그인 되었습니다.'
+            );
+
+            const re = client.closeWs();
 
             if (re) {
-                await client.connect();
+                await client.connectWs();
             }
             break
         }
@@ -1152,8 +1280,8 @@ async function command(cmd) {
         case '/mode': {
             const value = Number(args[0]);
 
-            if (![0, 1, 2].includes(value)) {
-                log.warn('[명령어]', '/모드 0|1|2');
+            if (![0, 1, 2, 3].includes(value)) {
+                log.warn('[명령어]', '/모드 번호');
                 break;
             }
 
@@ -1162,7 +1290,8 @@ async function command(cmd) {
             const name = {
                 0: '전체 채팅',
                 1: '열혈 이상',
-                2: '매니저 이상'
+                2: '매니저 이상',
+                3: '스트리머'
             }[mode];
 
             log.info('[모드]', `${name}만 표시합니다.`);
@@ -1289,13 +1418,78 @@ async function command(cmd) {
             break;
         }
 
+        case '/도전':
+        case '/challenge': {
+            const challenge = await client.sendChallengeList();
+
+            if (!challenge.ok) {
+                log.warn('[도전미션]', challenge?.message);
+                break;
+            }
+
+            if (!challenge.list.length) {
+                log.warn('[도전미션]', '진행중인 도전미션이 없습니다.');
+                break;
+            }
+
+            const text = challenge.list.map(item => {
+                const status = {
+                    REQUEST: '요청',
+                    PROGRESS: '진행중',
+                    SUCCESS: '성공',
+                    FAIL: '실패',
+                    CANCEL: '취소'
+                };
+
+                const lines = [
+                    `[도전미션] ${item.title}`,
+                    `상태: ${status[item.status]}`,
+                    `등록자: ${item.userNick}(${item.userId})`
+                ];
+
+                if (item.balloon > 0) {
+                    lines.push(`후원: ${item.balloon}개`);
+                }
+
+                if (item.unique > 0) {
+                    lines.push(`참여자: ${item.unique}명`);
+                }
+
+                if (item.status === 'PROGRESS') {
+                    lines.push(`남은 시간: ${client.formatTime(item.time)}`);
+                    lines.push(`종료 예정: ${item.expireDate}`);
+                }
+
+                if (
+                    item.status !== 'PROGRESS'
+                    && item.endDate
+                    && item.endDate !== '0000-00-00 00:00:00'
+                ) {
+                    lines.push(`종료일: ${item.endDate}`);
+                }
+
+                return lines.join('\n');
+            }).join('\n\n');
+
+            log.info(`\x1b[1m${text}\x1b[0m`);
+            break;
+        }
+
         case '/대결':
         case '/battle': {
-            const mission = await client.sendMissionList(client.bjId);
+            const mission = await client.sendMissionList();
 
-            if (mission) {
-                log.load(`\x1b[1m${client.formatMission(mission)}\x1b[0m`);
+            if (!mission.ok) {
+                log.warn('[대결미션]', mission?.message);
+                break;
             }
+
+            log.info('\x1b[1m' + [
+                `[대결미션] ${mission.title}`,
+                `상태: ${mission.status}`,
+                `총 후원: ${mission.total}개`,
+                `팀:\n${mission.teams}`
+            ].join('\n') + '\x1b[0m');
             break;
         }
 
@@ -1406,7 +1600,7 @@ async function command(cmd) {
                 `${index}. ${item.ogq_title}`
             ));
 
-            if (!list) {
+            if (!list?.length) {
                 log.warn('[OGQ]', 'OGQ 목록이 없습니다.');
                 break;
             }
@@ -1416,14 +1610,14 @@ async function command(cmd) {
                 break;
             }
 
-            const ogq = client.getOgq(ogqId);
+            const ogq = client.findOgq(ogqId);
 
             if (!ogq) {
                 log.warn('[OGQ]', '없는 OGQ 번호입니다.');
                 break;
             }
 
-            const result = await client.sendOgq(message, ogq, subId);
+            const result = await client.sendOgq(message, ogq.id, subId);
 
             if (result.code !== 1) {
                 log.warn('[OGQ]', 'OGQ 전송 실패', result.message);
@@ -1448,7 +1642,9 @@ async function command(cmd) {
         case '/help':
             log.prompt('[명령어]\n' + [
                 '/조회 아이디',
+                '/자동 true & false',
                 '/연결 아이디 방송비밀번호',
+                '/비밀번호 방송비밀번호',
                 '/연결해제',
                 '/로그인 아이디 비밀번호 +2차비밀번호',
                 '/로그아웃',

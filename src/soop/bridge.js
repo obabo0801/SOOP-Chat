@@ -15,8 +15,7 @@ export class Bridge {
     }
 
     isOpen() {
-        return (
-            this.ws
+        return (this.ws
             && this.ws.readyState === WebSocket.OPEN
         );
     }
@@ -34,35 +33,34 @@ export class Bridge {
     }
 
     async open() {
-        return new Promise((resolve, reject) => {
+        await new Promise((resolve, reject) => {
 
-        const timeout = setTimeout(() => {
-            reject(new Error('bridge timeout'));
-        }, 10000);
+            const timeout = setTimeout(() => {
+                reject('bridge timeout');
+            }, 10000);
 
-        this.ws.on('open', () => {
-            clearTimeout(timeout);
-            this.startPing();
-            this.send(this.makeInitGw());
-            resolve(true);
-        });
+            this.ws.on('open', () => {
+                clearTimeout(timeout);
+                this.startPing();
+                this.send(this.makeInitGw());
+                resolve(true);
+            });
 
-        this.ws.on('message', data => {
-            this.handler(
-                this.parse(data)
-            );
-        });
+            this.ws.on('message', data => {
+                this.handler(
+                    this.parse(data)
+                );
+            });
 
-        this.ws.on('error', error => {
-            clearTimeout(timeout);
-            reject(error);
-        });
+            this.ws.on('error', error => {
+                clearTimeout(timeout);
+                reject(error);
+            });
 
-        this.ws.on('close', (code, reason) => {
-            clearTimeout(timeout);
-            this.stopPing();
-        });
-
+            this.ws.on('close', (code, reason) => {
+                clearTimeout(timeout);
+                this.stopPing();
+            });
         });
     }
 
@@ -137,12 +135,20 @@ export class Bridge {
         case 'JOINCH_COMMON':
             this.onJoin(DATA);
             break;
+        
+        case 'CCP_SVC_JOINCH_COMMON':
+            this.onFail(DATA);
+            break;
+
+        case 'GETCHINFO':
+            break;
 
         case 'GETCHINFOEX':
-            this.onInfo(DATA);
             break;
         
         case 'SETCHINFO':
+            break;
+
         case 'SETCHINFOEX':
             this.onSet(DATA);
             break;
@@ -190,17 +196,19 @@ export class Bridge {
 
     onJoin(data = {}) {
         const info = {
-            broadNo: Number(data.uiBroadNo),
-            advCnt: Number(data.uiAdvCnt),
-            advTime: Number(data.uiAdvTime),
-            addInfo: data.pAddInfo
+            broad: this.client.broadcast,
+            bjId: this.client.bjId,
+            bjNick: this.client.bjNick,
         };
-
-        this.client.emit('bridgeJoin', info);
+        
+        this.client.emit('open', info);
     }
 
-    onInfo(data = {}) {
-        this.client.updateBroadcast(data);
+    onFail(data = {}) {
+        const text = data?.acErrMesg;
+        this.client.emit('error', text);
+        this.client.broadPw = null;
+        this.client.disconnect(false);
     }
 
     onSet(data = {}) {

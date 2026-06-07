@@ -1,4 +1,5 @@
 export const DOMAIN = {
+    soop: 'https://sooplive.com',
     login: 'https://login.sooplive.com',
     member: 'https://member.sooplive.com',
     event: 'https://afevent2.sooplive.com',

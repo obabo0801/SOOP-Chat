@@ -1,7 +1,8 @@
 {
     "bjId": "BJID",
-    "cookie": "",
     "broadPw": "BROADPW",
+    "auto": true,
+    "cookie": "",
 
     "isLink": true,
     "isList": false,

@@ -181,11 +181,11 @@ export function makeDumb(targetId, message) {
 }
 
 export function makeKick(
-    targetId, targetName, adminId, broadNo, index = 0, message = ''
+    targetId, targetNick, adminId, broadNo, index = 0, message = ''
 ) {
     const fields = [
         targetId,
-        targetName,
+        targetNick,
         adminId,
         broadNo,
         index,
