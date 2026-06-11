@@ -1,11 +1,12 @@
 import { config } from 'dotenv';
 import readline from 'readline';
-import { SoopClient } from '#soop/client';
-import * as http from '#soop/http';
 import * as log from '#utils/log';
 import { parseEnv } from '#utils/env';
 import { load, get } from '#utils/config';
 config({ quiet: true });
+
+import { SoopClient } from '#soop/client';
+import * as http from '#soop/http';
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -125,6 +126,36 @@ let client, isLink, isList, mode;
         );
 
         log.info('\x1b[94m[알림]\x1b[0m', `\x1b[1m${message}\x1b[0m`);
+    });
+
+    client.on('clip', data => {
+        if (isLink) { //----------------------------------------------------
+
+        if (data.url) {
+            log.load('[클립]', data.url);
+        }
+
+        } //----------------------------------------------------------------
+
+        log.info(
+            '[알림]',
+            `\x1b[1m새 클립이 올라왔습니다. | 제목: ${data.title} | 작성자: ${data.userNick} | 작성일: ${data.regDate}\x1b[0m`
+        );
+    });
+
+    client.on('catch', data => {
+        if (isLink) { //----------------------------------------------------
+
+        if (data.url) {
+            log.load('[캐치]', data.url);
+        }
+
+        } //----------------------------------------------------------------
+
+        log.info(
+            '[알림]',
+            `\x1b[1m새 캐치가 올라왔습니다. | 제목: ${data.title} | 작성자: ${data.userNick} | 작성일: ${data.regDate}\x1b[0m`
+        );
     });
 
     // open

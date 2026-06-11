@@ -20,6 +20,8 @@ export class SoopClient {
         this.liveTimer = null;
         this.sessionTimer = null;
         this.postTimer = null;
+        this.clipTimer = null;
+        this.catchTimer = null;
 
         this.bjNick = null;
 
@@ -68,6 +70,8 @@ export class SoopClient {
         this.auth = null;
         this.pending = null;
         this.post = null;
+        this.clip = null;
+        this.catch = null;
         this.ending = null;
 
         this.channel = null;
@@ -263,6 +267,8 @@ export class SoopClient {
         }
 
         this.startPost();
+        this.startClip();
+        this.startCatch();
 
         await this.loadAssets();
 
@@ -420,6 +426,8 @@ export class SoopClient {
         this.closeBridge();
         this.closeWs();
         this.stopPost();
+        this.stopClip();
+        this.stopCatch();
 
         const data = {
             bjId: this.bjId,
@@ -660,38 +668,38 @@ export class SoopClient {
     async checkPost() {
         if (!this.bjId) return false;
 
-        const posts = await this.sendPostList();
-        const post = this.findLastPost(posts);
+        const list = await this.sendPostList();
+        const data = this.findLastPost(list);
 
-        if (!post?.titleNo) return false;
+        if (!data?.titleNo) return false;
 
         if (!this.post) {
-            this.post = post.titleNo;
+            this.post = data.titleNo;
             return false;
         }
 
-        if (this.post === post.titleNo) {
+        if (this.post === data.titleNo) {
             return false;
         }
 
-        this.post = post.titleNo;
+        this.post = data.titleNo;
 
         const url = new URL(
-            `/station/${this.bjId}/post/${post.titleNo}`,
+            `/station/${this.bjId}/post/${data.titleNo}`,
             DOMAIN.soop
         );
 
         this.emit('post', {
             bjId: this.bjId,
-            bjNick: post.userNick,
-            titleNo: post.titleNo,
-            title: post.titleName,
-            content: post.content,
-            regDate: post.regDate,
+            bjNick: data.userNick,
+            titleNo: data.titleNo,
+            title: data.titleName,
+            content: data.content,
+            regDate: data.regDate,
             url: url.href
         });
 
-        return post;
+        return data;
     }
 
     startPost() {
@@ -709,6 +717,118 @@ export class SoopClient {
 
         clearInterval(this.postTimer);
         this.postTimer = null;
+
+        return true;
+    }
+
+    async checkClip() {
+        if (!this.bjId) return false;
+
+        const list = await this.sendClipList();
+        const data = this.findLastClip(list);
+
+        if (!data?.titleNo) return false;
+
+        if (!this.clip) {
+            this.clip = data.titleNo;
+            return false;
+        }
+
+        if (this.clip === data.titleNo) {
+            return false;
+        }
+
+        this.clip = data.titleNo;
+
+        const url = new URL(
+            `/player/${data.titleNo}`,
+            DOMAIN.vod
+        );
+
+        this.emit('clip', {
+            bjId: data.badge.bjId,
+            userId: data.userId,
+            userNick: data.userNick,
+            titleNo: data.titleNo,
+            title: data.titleName,
+            regDate: data.regDate,
+            url: url.href
+        });
+
+        return data;
+    }
+
+    startClip() {
+        this.stopClip();
+
+        this.clipTimer = setInterval(async () => {
+            await this.checkClip();
+        }, 120000);
+    }
+
+    stopClip() {
+        if (!this.clipTimer) {
+            return false;
+        }
+
+        clearInterval(this.clipTimer);
+        this.clipTimer = null;
+
+        return true;
+    }
+
+    async checkCatch() {
+        if (!this.bjId) return false;
+
+        const list = await this.sendCatchList();
+        const data = this.findLastCatch(list);
+
+        if (!data?.titleNo) return false;
+
+        if (!this.catch) {
+            this.catch = data.titleNo;
+            return false;
+        }
+
+        if (this.catch === data.titleNo) {
+            return false;
+        }
+
+        this.catch = data.titleNo;
+
+        const url = new URL(
+            `/player/${data.titleNo}/catch`,
+            DOMAIN.vod
+        );
+
+        this.emit('catch', {
+            bjId: data.badge.bjId,
+            userId: data.userId,
+            userNick: data.userNick,
+            titleNo: data.titleNo,
+            title: data.titleName,
+            regDate: data.regDate,
+            url: url.href
+        });
+
+        return data;
+    }
+
+    startCatch() {
+        this.stopCatch();
+
+        this.catchTimer = setInterval(async () => {
+            await this.checkCatch();
+        }, 120000);
+    }
+
+    stopCatch() {
+        if (!this.catchTimer) {
+            return false;
+        }
+
+        clearInterval(this.catchTimer);
+        this.catchTimer = null;
 
         return true;
     }
@@ -1137,6 +1257,44 @@ export class SoopClient {
         return data.find(post => {
             return post.userId === this.bjId
         });
+    }
+
+    async sendClipList() {
+        const result = (
+            await http.getVod(
+            this.bjId,
+            'clip',
+            { cookie: this.cookie }
+        ));
+
+        return result?.contents;
+    }
+
+    findLastClip(data = []) {
+        if (!Array.isArray(data)) {
+            return null;
+        }
+
+        return data[0] ?? null;
+    }
+
+    async sendCatchList() {
+        const result = (
+            await http.getVod(
+            this.bjId,
+            'catch',
+            { cookie: this.cookie }
+        ));
+
+        return result?.contents;
+    }
+
+    findLastCatch(data = []) {
+        if (!Array.isArray(data)) {
+            return null;
+        }
+
+        return data[0] ?? null;
     }
 
     async sendIceMode(type = 'ice_on', auth = 100001) { 

@@ -181,16 +181,82 @@ export async function getMyPlus(options = {}) {
     return json?.DATA;
 }
 
-export async function getSection(bjId, chip, options = {}) {
+export async function getChannel(bjId, chip, options = {}) {
     const url = new URL(
         `/v1.1/channel/${encodeURIComponent(bjId)}`
-        + `/home/section/${chip}`,
+        + `/${chip}`,
         DOMAIN.channel
     );
 
     const json = await requestJson(url, {
         ...options,
         method: 'GET'
+    });
+
+    return json;
+}
+
+export async function getSection(bjId, chip, options = {}) {
+    return getChannel(
+        bjId, 
+        `home/section/${chip}`, 
+        options
+    );
+}
+
+export async function getVod(bjId, chip = '', options = {}) {
+    return getChannel(
+        bjId, 
+        `vod/${chip}`, 
+        options
+    );
+}
+
+export async function getVodList(index, options = {}) {
+    const url = new URL(
+        `/api/chk_download_auth.php`,
+        DOMAIN.vod
+    );
+
+    const body = new URLSearchParams({
+        szWork: 'LIST',
+        nTitleNo: index,
+        nSkipAdult: 0
+    });
+
+    const json = await requestJson(url, {
+        ...options,
+        method: 'POST',
+        body
+    });
+
+    if (json?.RESULT === 1) {
+        return json.FILE_LIST;
+    }
+}
+
+export async function getVodUrl(
+    index, name, order, options = {}
+) {
+    const url = new URL(
+        `/api/chk_download_auth.php`,
+        DOMAIN.vod
+    );
+
+    const body = new URLSearchParams({
+        szWork: 'DOWN_URL',
+        nTitleNo: index,
+        nFileOrder: order,
+        szFileLevel: 'original',
+        szFileName: name,
+        clipFrom: '',
+        clipTo: ''
+    });
+
+    const json = await requestJson(url, {
+        ...options,
+        method: 'POST',
+        body
     });
 
     return json;
