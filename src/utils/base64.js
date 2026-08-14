@@ -17,12 +17,14 @@ function isBase64(str) {
     }
 
     const norm = normalize(str);
-    const enc = normalize(
-        Buffer.from(str, 'base64')
-        .toString('utf8')
+    const decoded = Buffer.from(str, 'base64')
+        .toString('utf8');
+    const encoded = normalize(
+        Buffer.from(decoded, 'utf8')
+        .toString('base64')
     );
     
-    return norm === enc;
+    return norm === encoded;
 }
 
 export function encode(str) {

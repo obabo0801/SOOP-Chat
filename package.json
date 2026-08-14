@@ -1,6 +1,6 @@
 {
   "name": "soop-chat",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "MIT",
   "author": "unjongjjing",
   "type": "module",
@@ -22,9 +22,8 @@
     "LICENSE"
   ],
   "dependencies": {
+    "dotenv": "^17.4.2",
+    "playwright": "^1.62.1",
     "ws": "^8.21.0"
-  },
-  "devDependencies": {
-    "dotenv": "^17.4.2"
   }
 }

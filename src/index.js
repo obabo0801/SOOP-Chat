@@ -61,16 +61,18 @@ let client, isLink, isList, mode;
         pver, subtitle, cookie
     });
 
-    if (getConfig('userId')) {
-        await client.login(
-            getConfig('userId'),
-            getConfig('password'),
-            getConfig('secondPw')
-        );
-    }
+    const browser = (
+        process.env.BROWSER
+            ?.toLowerCase() === 'true'
+    );
 
     // live
     client.on('live', data => {
+        if (data.result === -1 && data.message) {
+            log.warn('[알림]', `\x1b[1m${data.message}\x1b[0m`);
+            return;
+        }
+
         let message = '';
 
         switch (data.code) {
@@ -362,7 +364,7 @@ let client, isLink, isList, mode;
             ? '님이 매니저가 되셨습니다.'
             : '님이 매니저에서 해임 되셨습니다.';
 
-        log.allim('[알림]', `\x1b[1m${data.userNick}(${data.userId})${message}\x1b[0m`);
+        log.cmd('[알림]', `\x1b[1m${data.userNick}(${data.userId})${message}\x1b[0m`);
     });
 
     // nickName
@@ -388,7 +390,7 @@ let client, isLink, isList, mode;
     // iceMode
     client.on('iceMode', data => {
         if (data.index === 0) {
-            log.allim('[얼음]', '\x1b[1m채팅을 녹였습니다. 채팅에 참여 하실 수 있습니다.\x1b[0m');
+            log.cmd('[얼음]', '\x1b[1m채팅을 녹였습니다. 채팅에 참여 하실 수 있습니다.\x1b[0m');
             return;
         }
 
@@ -407,7 +409,7 @@ let client, isLink, isList, mode;
             auth.isManagerAllowed && '매니저',
         ].filter(Boolean);
 
-        log.allim('[얼음]', `\x1b[1m채팅을 얼렸습니다. ${names.join(', ')}만 채팅에 참여할 수 있습니다.\x1b[0m`);
+        log.cmd('[얼음]', `\x1b[1m채팅을 얼렸습니다. ${names.join(', ')}만 채팅에 참여할 수 있습니다.\x1b[0m`);
     });
 
     // slowMode
@@ -974,7 +976,7 @@ let client, isLink, isList, mode;
 
         log.warn('[세션]', 
             `방송 세션이 변경되어 재연결합니다.\n`
-            + `제목: ${data.after?.TITLE} → ${data.after?.TITLE}\n`
+            + `제목: ${data.before?.TITLE} → ${data.after?.TITLE}\n`
             + `BNO: ${data.before?.BNO} → ${data.after?.BNO}\n`
             + `CHATNO: ${data.before?.CHATNO} → ${data.after?.CHATNO}`
         );
@@ -1014,8 +1016,56 @@ let client, isLink, isList, mode;
         });
     });
 
+    // 기존 쿠키가 없으면 비로그인 상태로 먼저 접속
     await client.connect();
-})();
+
+    // 비로그인 접속 후 브라우저 로그인
+    if (!client.cookie && browser) {
+        try {
+            const { getSoopCookie } = await import(
+                '#soop/browser'
+            );
+
+            const cookie = await getSoopCookie();
+
+            const info = await http.getPrivateInfo({
+                cookie
+            });
+
+            if (Number(info?.IS_LOGIN) !== 1) {
+                throw new Error(
+                    '브라우저 로그인 상태를 확인하지 못했습니다.'
+                );
+            }
+
+            client.cookie = cookie;
+            client.disconnect(false);
+
+            await client.connect();
+
+            log.info('[로그인]', '브라우저 로그인이 완료되었습니다.');
+        } catch (error) {
+            log.error('[로그인]', error);
+        }
+    }
+
+    // 브라우저 로그인이 없거나 실패하면 기존 계정 로그인
+    if (!client.cookie && getConfig('userId')) {
+        const result = await client.login(
+            getConfig('userId'),
+            getConfig('password'),
+            getConfig('secondPw')
+        );
+
+        if (result === 1) {
+            client.disconnect(false);
+            await client.connect();
+        }
+    }
+})().catch(error => {
+    log.error(error);
+    prompt();
+});
 
 function shutdown() {
     pause();

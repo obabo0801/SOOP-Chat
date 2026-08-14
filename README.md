@@ -32,6 +32,14 @@ git@github.com:obabo0801/SOOP-Chat.git
 <details>
 <summary>❗ 업데이트 내역</summary>
 
+## ❗ 버전 1.0.2
+- 브라우저 로그인 기능 추가
+  - 로그인 상태 저장 및 재사용
+- SOOP 서비스 점검 메시지 표시
+- 로그인 패킷 오류 수정
+- 자동 연결 및 세션 오류 처리 개선
+- 로그와 환경변수 처리 개선
+
 ## ❗ 버전 1.0.1
 - 방송 자동 대기 기능 추가
 - 방송 상태 안내 메시지 추가
@@ -136,6 +144,23 @@ USERID="YOUR_ID"
 PASSWORD="YOUR_PASSWORD"
 SECONDPW="YOUR_SECONDPW"
 ```
+
+### 브라우저 로그인
+
+`.env`에서 브라우저 로그인을 설정합니다.
+
+```env
+BROWSER="true"
+```
+
+최초 사용 시 Chromium을 설치합니다.
+
+```bash
+npx playwright install chromium
+```
+
+로그인 정보는 `browser.json`에 저장됩니다.  
+계정을 변경하려면 파일을 삭제하세요.
 
 ## ⚙️ 설정
 

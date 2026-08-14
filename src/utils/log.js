@@ -2,9 +2,12 @@ import * as file from '#utils/file';
 import * as time from '#utils/time';
 
 const LEVELS = Object.freeze({
-    ALLIM: 'allim',
+    TITLE: 'title',
+    LIST: 'list',
+    CMD: 'cmd',
     INPUT: 'input',
     LOAD: 'load',
+    READY: 'ready',
     DEBUG: 'debug',
     INFO: 'info',
     WARN: 'warn',
@@ -12,9 +15,12 @@ const LEVELS = Object.freeze({
 });
 
 const CONSOLE = Object.freeze({
-    [LEVELS.ALLIM]: console.info,
+    [LEVELS.TITLE]: console.info,
+    [LEVELS.LIST]: console.info,
+    [LEVELS.CMD]: console.info,
     [LEVELS.INPUT]: console.info,
     [LEVELS.LOAD]: console.info,
+    [LEVELS.READY]: console.info,
     [LEVELS.DEBUG]: console.debug,
     [LEVELS.INFO]: console.info,
     [LEVELS.WARN]: console.warn,
@@ -22,9 +28,12 @@ const CONSOLE = Object.freeze({
 });
 
 const COLORS = Object.freeze({
-    [LEVELS.ALLIM]: '\x1b[96m',
+    [LEVELS.TITLE]: '\x1b[97m',
+    [LEVELS.LIST]: '\x1b[1m',
+    [LEVELS.CMD]: '\x1b[96m',
     [LEVELS.INPUT]: '\x1b[1m',
     [LEVELS.LOAD]: '\x1b[92m',
+    [LEVELS.READY]: '\x1b[1m',
     [LEVELS.DEBUG]: '\x1b[90m',
     [LEVELS.INFO]: '\x1b[0m',
     [LEVELS.WARN]: '\x1b[93m',
@@ -32,15 +41,28 @@ const COLORS = Object.freeze({
     RESET: '\x1b[0m'
 });
 
+function formatArgs(args) {
+    return args
+        .map(value => {
+            if (value instanceof Error) {
+                return value.stack
+                    || value.message
+                    || value.name;
+            }
+
+            return typeof value === 'object'
+                ? stringify(value)
+                : String(value);
+        })
+        .join(' ');
+}
+
 export function append(level, ...args) {
     const type = String(level);
-    const arg = args
-        .map(a => typeof a === 'object' 
-        ? stringify(a) : String(a))
-        .join(' ');
+    const arg = formatArgs(args);
 
     const data = 
-        `[${time.getTime()}] ${arg}`;
+        `[${time.getTime()}] [${type}] ${arg}`;
 
     return file.append(
         `logs/${time.getDate()}.log`, data);
@@ -48,13 +70,10 @@ export function append(level, ...args) {
 
 export function send(level, ...args) {
     const type = String(level);
-    const arg = args
-        .map(a => typeof a === 'object' 
-        ? stringify(a) : String(a))
-        .join(' ');
+    const arg = formatArgs(args);
 
     const data = 
-        `[${time.getTime()}] ${arg}`;
+        `[${time.getTime()}] [${type}] ${arg}`;
 
     const l = CONSOLE[type] ?? console.log;
     const c = COLORS[type] ?? COLORS.RESET;
@@ -66,10 +85,7 @@ export function send(level, ...args) {
 
 export function print(level, ...args) {
     const type = String(level);
-    const arg = args
-        .map(a => typeof a === 'object' 
-        ? stringify(a) : String(a))
-        .join(' ');
+    const arg = formatArgs(args);
 
     const l = CONSOLE[type] ?? console.log;
     const c = COLORS[type] ?? COLORS.RESET;
@@ -80,9 +96,15 @@ export function print(level, ...args) {
 }
 
 function stringify(data) {
-    return JSON.stringify(data, (_, v) =>
-        typeof v === 'bigint'
-         ? v.toString() : v);
+    try {
+        return JSON.stringify(data, (_, value) =>
+            typeof value === 'bigint'
+                ? value.toString()
+                : value
+        );
+    } catch {
+        return String(data);
+    }
 }
 
 export function strformat(commands, {
@@ -103,6 +125,10 @@ export function strtemplate(text, values = {}) {
 
 export function clear() { console.clear() }
 
+export function title(...args) {
+    return print(LEVELS.TITLE, ...args);
+}
+
 export function silent(...args) {
     return append(LEVELS.INFO, ...args);
 }
@@ -111,8 +137,12 @@ export function prompt(...args) {
     return print(LEVELS.INFO, ...args);
 }
 
-export function allim(...args) {
-    return send(LEVELS.ALLIM, ...args);
+export function list(...args) {
+    return print(LEVELS.LIST, ...args);
+}
+
+export function cmd(...args) {
+    return send(LEVELS.CMD, ...args);
 }
 
 export function input(...args) {
@@ -121,6 +151,10 @@ export function input(...args) {
 
 export function load(...args) {
     return send(LEVELS.LOAD, ...args);
+}
+
+export function ready(...args) {
+    return send(LEVELS.READY, ...args);
 }
 
 export function debug(...args) {

@@ -23,10 +23,8 @@ export function join(...args) {
 }
 
 export function find(name) {
-    if (exists(name)) return name;
-    return dir('.').filter(f =>
-        path.basename(f) === name)
-        .map(get)[0] || null;
+    const file = get(name);
+    return fs.existsSync(file) ? file : null;
 }
 
 export function exists(name) {

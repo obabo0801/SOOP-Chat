@@ -25,10 +25,13 @@ export function uptime(ms) {
 }
 
 export function getDate() {
-    return (`${getYear()}-`
-        + `${getMonth()}-`
-        + `${getDay()}`
-    );
+    const date = new Date();
+
+    return [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate())
+    ].join('-');
 }
 
 export function getYear() {

@@ -38,7 +38,7 @@ export function dispatch(soop, pkt) {
 
         soop.userFlag = fields[6];
 
-        if (soop.cookie?.AuthTicket) {
+        if (soop.info?.IS_LOGIN === 1) {
             soop.sendUserFlag(soop.userFlag);
         }
 

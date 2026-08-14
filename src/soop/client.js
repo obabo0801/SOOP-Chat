@@ -151,6 +151,14 @@ export class SoopClient {
             setTimeout(resolve, ms)
         );
     }
+
+    safe(task) {
+        return Promise.resolve()
+            .then(task)
+            .catch(error => {
+                this.emit('error', error);
+            });
+    }
     
     isOpen() {
         return (this.ws
@@ -299,16 +307,20 @@ export class SoopClient {
         }
 
         const result = channel.RESULT;
+        const options = {
+            result,
+            message: channel.MSG
+        };
 
         if (result !== 1) {
             if (this.auth !== result
                 && this.auto) {
-                this.emitAuto(result);
+                this.emitAuto(result, options);
                 this.startLive();
             }
 
             else if (!this.auto) {
-                this.emitAuto(3);
+                this.emitAuto(3, options);
             }
             return false;
         }
@@ -579,8 +591,8 @@ export class SoopClient {
     startLive() {
         this.stopLive();
 
-        this.liveTimer = setInterval(async () => {
-            await this.checkLive();
+        this.liveTimer = setInterval(() => {
+            this.safe(() => this.checkLive());
         }, 60000);
     }
 
@@ -638,8 +650,8 @@ export class SoopClient {
     startSession() {
         this.stopSession();
 
-        this.sessionTimer = setInterval(async () => {
-            await this.checkSession();
+        this.sessionTimer = setInterval(() => {
+            this.safe(() => this.checkSession());
         }, 30000);
     }
 
@@ -694,8 +706,8 @@ export class SoopClient {
     startPost() {
         this.stopPost();
 
-        this.postTimer = setInterval(async () => {
-            await this.checkPost();
+        this.postTimer = setInterval(() => {
+            this.safe(() => this.checkPost());
         }, 120000);
     }
 
@@ -715,26 +727,40 @@ export class SoopClient {
             return true;
         }
 
-        let result;
+        const bridge = new Bridge(this);
+        this.bridge = bridge;
 
-        await new Promise(async (resolve) => {
+        return new Promise(resolve => {
+            let settled = false;
 
-            this.bridge = new Bridge(this);
+            const finish = result => {
+                if (settled) return;
+                settled = true;
 
-            this.once('error', () => {
-                result = false;
-                resolve(true);
+                this.off('error', onError);
+                this.off('open', onOpen);
+
+                if (!result && this.bridge === bridge) {
+                    this.closeBridge();
+                }
+
+                resolve(result);
+            };
+
+            const onError = () => finish(false);
+            const onOpen = () => finish(true);
+
+            this.on('error', onError);
+            this.on('open', onOpen);
+
+            bridge.connect().catch(error => {
+                try {
+                    this.emit('error', error);
+                } finally {
+                    finish(false);
+                }
             });
-
-            this.once('open', () => {
-                result = true;
-                resolve(true);
-            });
-
-            await this.bridge.connect();
         });
-
-        return result;
     }
 
     closeBridge() {
