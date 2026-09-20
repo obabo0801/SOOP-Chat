@@ -5,6 +5,8 @@ export const DOMAIN = {
     event: 'https://afevent2.sooplive.com',
 
     live: 'https://live.sooplive.com',
+    play: 'https://play.sooplive.com',
+    package: 'ws://localhost:21201/Websocket',
     chapi: 'https://chapi.sooplive.com',
     channel: 'https://api-channel.sooplive.com',
 
@@ -16,6 +18,16 @@ export const DOMAIN = {
 
     ogq: ('https://ogq-sticker-global'
         + '-cdn-z01.sooplive.com'),
+};
+
+export const QUALITY = {
+    original: 2,
+    hd8k: 11,
+    hd4k: 10,
+    hd2k: 10,
+    high: 1,
+    hd: 3,
+    sd: 4,
 };
 
 export const DELIMITER = {
@@ -143,6 +155,20 @@ export const SVC = {
     SUBTITLE_V2: 139,
     CHEER_TEAM_CHANGE: 140,
     NIGHTBOT_TIMEOUT: 141,
+};
+
+export const PACKAGE = {
+    KEEPALIVE: 1,
+    BROADEND: 3,
+    INIT_BROAD: 4,
+    START: 5,
+    CLOSECH: 6,
+    ERROR: 16,
+    QUALITY: 18,
+    CENTER_CLOSE: 27,
+    CERTTICKET: 39,
+    INIT_GW: 40,
+    NOTIFY: 43,
 };
 
 export const USER_FLAG1 = {

@@ -105,23 +105,54 @@ let client, isLink, isList, mode;
         log.info('[알림]', `\x1b[1m${message}\x1b[0m`);
     });
 
-    client.on('post', data => {
-        if (isLink) { //----------------------------------------------------
-        
-        if (data.url) {
-            log.load('[게시글]', data.url);
-        }
+    const contents = {
+        post: ['게시글', '새 글을 작성했습니다.'],
+        edit: ['게시글 수정', '게시글을 수정했습니다.'],
+        clip: ['클립', '새 클립을 등록했습니다.'],
+        catch: ['캐치', '새 캐치를 등록했습니다.']
+    };
 
-        } //----------------------------------------------------------------
+    for (const [event, [label, action]] of Object.entries(contents)) {
+        client.on(event, data => {
+            if (isLink && data.url) {
+                log.load(`[${label}]`, data.url);
+            }
 
-        let message = (
-            `${data.bjNick}님이 새 글을 작성했습니다. | `
-            + `제목: ${data.title} | `
-            + `작성일: ${data.regDate}`
-        );
+            const message = (
+                `${data.bjNick}님이 ${action} | `
+                + `제목: ${data.title} | `
+                + `작성일: ${data.regDate}`
+            );
 
-        log.info('\x1b[94m[알림]\x1b[0m', `\x1b[1m${message}\x1b[0m`);
-    });
+            log.info('\x1b[94m[알림]\x1b[0m', `\x1b[1m${message}\x1b[0m`);
+        });
+    }
+
+    for (const event of ['remove', 'visibility']) {
+        client.on(event, data => {
+            const label = { post: '게시글', clip: '클립', catch: '캐치' }[data.type];
+            const action = event === 'remove' ? '삭제'
+                : data.public ? '공개 전환' : '비공개 전환';
+            if (isLink && data.url) log.load(`[${label}]`, data.url);
+            log.info(`[${label} ${action}]`, data.title);
+        });
+    }
+
+    const comments = {
+        comment: '작성',
+        update: '수정',
+        delete: '삭제 감지'
+    };
+
+    for (const [event, action] of Object.entries(comments )) {
+        client.on(event, data => {
+            const label = data.parentCommentNo ? '답글' : '댓글';
+            if (isLink && data.url) log.load(`[${label}]`, data.url);
+            log.info(`[${label} ${action}]`,
+                `${data.userNick}(${data.userId}) | 게시글: ${data.title} | ${data.message}`
+            );
+        });
+    }
 
     // open
     client.on('open', data => {
@@ -721,7 +752,7 @@ let client, isLink, isList, mode;
 
         log.warn('[OGQ 선물]', 
             `\x1b[1m${data.fromNick}(${data.fromId})님이 `
-            + `${data.toNick}(${data.toId})님에게 `
+            + `${data.receivedName}(${data.receivedId})님에게 `
             + `${data.title} OGQ 이모티콘을 선물 하셨습니다.\x1b[0m`
         );
 
@@ -902,7 +933,14 @@ let client, isLink, isList, mode;
 
         log.warn('[후원]', `\x1b[1m${message}\x1b[0m`);
 
-        const mission = await client.sendMissionList();
+        let mission;
+
+        try {
+            mission = await client.sendMissionList();
+        } catch (error) {
+            log.error('[대결미션]', error);
+            return;
+        }
 
         if (!mission.ok) {
             log.warn('[대결미션]', mission.message);
@@ -1098,6 +1136,19 @@ function getConfig(name) {
         if (result.toLowerCase() === name.toLowerCase()) {
             return null;
         }
+
+        const value = result.trim();
+
+        if (['auto', 'isLink', 'isList'].includes(name)) {
+            if (value.toLowerCase() === 'true') return true;
+            if (value.toLowerCase() === 'false') return false;
+            return null;
+        }
+
+        if (['pver', 'subtitle', 'mode'].includes(name)) {
+            return value && Number.isFinite(Number(value))
+                ? Number(value) : null;
+        }
     }
 
     return result;
@@ -1285,6 +1336,11 @@ async function command(cmd) {
 
             if (result === -2) {
                 log.error('[로그인]', '2차 비밀번호를 잘못 입력하셨습니다.');
+                break;
+            }
+
+            if (result !== 1) {
+                log.error('[로그인]', '로그인 요청을 완료하지 못했습니다.');
                 break;
             }
 

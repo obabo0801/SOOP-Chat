@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws';
 import crypto from 'crypto';
 import { Bridge } from '#soop/bridge';
+import { Package } from '#soop/package';
 import * as http from '#soop/http';
 import * as packet from '#soop/packet';
 import * as handler from '#soop/handler';
@@ -14,12 +15,14 @@ export class SoopClient {
     constructor(options = {}) {
         this.ws = null;
         this.bridge = null;
+        this.package = null;
 
         this.station = null;
 
         this.liveTimer = null;
         this.sessionTimer = null;
-        this.postTimer = null;
+        this.contentWatch = null;
+        this.contentStates = new Map();
 
         this.bjNick = null;
 
@@ -67,7 +70,6 @@ export class SoopClient {
 
         this.auth = null;
         this.pending = null;
-        this.post = null;
         this.ending = null;
 
         this.channel = null;
@@ -75,7 +77,7 @@ export class SoopClient {
         this.userFlag = null;
 
         this.info = null;
-        this.category = null;
+        this.category = new Map();
         this.rule = null;
         this.poll = null;
 
@@ -191,6 +193,10 @@ export class SoopClient {
 
         await this.loadBasics();
 
+        this.info = await http.getPrivateInfo({
+            cookie: this.cookie
+        });
+
         return result.data.RESULT;
     }
 
@@ -212,6 +218,10 @@ export class SoopClient {
         }
 
         await this.loadBasics();
+
+        this.info = await http.getPrivateInfo({
+            cookie: this.cookie
+        });
 
         return result.data.RESULT;
     }
@@ -252,6 +262,9 @@ export class SoopClient {
         if (!bjId) {
             bjId = this.bjId;
         }
+        if (this.bjId !== bjId) {
+            this.stopPackage();
+        }
         this.bjId = bjId;
 
         if (!broadPw) {
@@ -261,13 +274,13 @@ export class SoopClient {
 
         if (!bjId) return false;
 
+        await this.startContent();
+
         await this.loadBasics();
 
         if (!this.channel) {
             return false;
         }
-
-        this.startPost();
 
         await this.loadAssets();
 
@@ -336,26 +349,43 @@ export class SoopClient {
 
     async openSocket() {
         await new Promise((resolve, reject) => {
+            let settled = false;
+
+            const finish = error => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                this.off('join', done);
+
+                if (error) reject(error);
+                else resolve(true);
+            };
 
             const timeout = setTimeout(() => {
-                reject('chat timeout');
+                finish(new Error(
+                    '채팅 연결 시간이 초과되었습니다.'
+                ));
             }, 10000);
 
             const done = async () => {
-                clearTimeout(timeout);
+                this.off('join', done);
 
-                await this.sendClubColor(0);
+                try {
+                    await this.sendClubColor(0);
 
-                if (this.pver !== 0) {
-                    await this.sendUserList();
+                    if (this.pver !== 0) {
+                        await this.sendUserList();
+                    }
+
+                    await this.sendSubtitle();
+
+                    finish();
+                } catch (error) {
+                    finish(error);
                 }
-
-                await this.sendSubtitle();
-
-                resolve(true);
             };
 
-            this.once('join', done);
+            this.on('join', done);
 
             this.ws.on('open', () => {
                 this.sendLogin();
@@ -370,14 +400,15 @@ export class SoopClient {
             });
 
             this.ws.on('error', error => {
-                clearTimeout(timeout);
+                finish(error);
                 this.emit('error', error);
-                reject(error);
             });
 
-            this.ws.on('close', async () => {
-                clearTimeout(timeout);
+            this.ws.on('close', () => {
                 this.stopPing();
+                finish(new Error(
+                    '채팅 연결이 완료되기 전에 연결이 종료되었습니다.'
+                ));
             });
         });
     }
@@ -401,7 +432,13 @@ export class SoopClient {
             headers
         });
 
-        await this.openSocket();
+        try {
+            await this.openSocket();
+        } catch (error) {
+            this.closeWs();
+            this.closeBridge();
+            throw error;
+        }
         this.startSession();
 
         return true;
@@ -421,6 +458,7 @@ export class SoopClient {
     }
 
     disconnect(show = true) {
+        this.stopPackage();
         this.stopPing();
         if (!this.auto) {
             this.stopLive();
@@ -428,7 +466,9 @@ export class SoopClient {
 
         this.closeBridge();
         this.closeWs();
-        this.stopPost();
+        if (!this.auto) {
+            this.stopContent();
+        }
 
         const data = {
             bjId: this.bjId,
@@ -572,20 +612,18 @@ export class SoopClient {
             return false;
         }
 
-        const check = (
-            await this.connectBridge()
-        );
-
-        if (!check) return false;
-
         this.pending = true;
 
-        await this.sleep(this.delay);
+        try {
+            await this.sleep(this.delay);
 
-        return this.connect(
-            this.bjId,
-            this.broadPw
-        );
+            return await this.connect(
+                this.bjId,
+                this.broadPw
+            );
+        } finally {
+            this.pending = false;
+        }
     }
 
     startLive() {
@@ -667,58 +705,328 @@ export class SoopClient {
     }
 
     async checkPost() {
-        if (!this.bjId) return false;
+        return this.checkContent('post');
+    }
 
-        const posts = await this.sendPostList();
-        const post = this.findLastPost(posts);
+    async checkClip() {
+        return this.checkContent('clip');
+    }
 
-        if (!post?.titleNo) return false;
+    async checkCatch() {
+        return this.checkContent('catch');
+    }
 
-        if (!this.post) {
-            this.post = post.titleNo;
-            return false;
+    contentTime(value = '') {
+        const date = String(value).trim().replace(' ', 'T');
+        return Date.parse(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(date)
+            ? `${date}+09:00` : date);
+    }
+
+    async checkContent(type) {
+        const watch = this.contentWatch;
+        if (!watch || watch.bjId !== this.bjId) return false;
+        const state = watch.states.get(type);
+        if (!state || watch.loading.has(type)) return false;
+        watch.loading.add(type);
+
+        try {
+            const load = {
+                post: () => this.sendPostList(watch.bjId),
+                clip: () => this.sendClipList(watch.bjId),
+                catch: () => this.sendCatchList(watch.bjId)
+            };
+            const started = Math.floor(Date.now() / 1000) * 1000;
+            const cookie = http.cookieString(this.cookie);
+            const auth = crypto.createHash('sha256').update(cookie).digest('hex');
+            if (state.auth !== auth) {
+                for (const record of state.records.values()) record.missing = 0;
+                state.auth = auth;
+            }
+            const list = await load[type]();
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) return false;
+            if (!Array.isArray(list)) {
+                for (const record of state.records.values()) record.missing = 0;
+                return false;
+            }
+
+            const items = list.filter(item => item?.titleNo
+                && (type !== 'post' || item.userId === watch.bjId));
+            items.sort((a, b) => Number(a.titleNo) - Number(b.titleNo));
+
+            const events = [];
+            const current = new Set();
+            for (const item of items) {
+                const id = String(item.titleNo);
+                current.add(id);
+                state.pending.delete(id);
+                const data = {
+                    type, bjId: watch.bjId, bjNick: item.userNick,
+                    titleNo: item.titleNo, title: item.titleName,
+                    content: item.content, regDate: item.regDate,
+                    url: type === 'post'
+                        ? new URL(`/station/${watch.bjId}/post/${id}`, DOMAIN.soop).href
+                        : new URL(`/player/${id}`, DOMAIN.vod).href
+                };
+                const record = state.records.get(id);
+                const auth = Number(item.authNo);
+                if (state.ready && record && [101, 102].includes(auth)
+                    && record.auth !== null && record.auth !== auth) {
+                    events.push({ event: 'visibility', data: {
+                        ...data, public: auth === 101
+                    }});
+                }
+                state.records.set(id, {
+                    data, auth: [101, 102].includes(auth) ? auth : record?.auth ?? null,
+                    missing: 0, removed: false
+                });
+                const signature = JSON.stringify([
+                    item.titleName, item.content ?? '', item.photos ?? []
+                ]);
+                const previous = state.items.get(id);
+                state.items.set(id, signature);
+
+                if (!state.ready) continue;
+                const updated = type === 'post' && previous !== undefined
+                    && previous !== signature;
+                const time = this.contentTime(item.regDate);
+                const created = previous === undefined && Number.isFinite(time)
+                    && time >= state.since && time <= Date.now();
+                if (!updated && !created) continue;
+
+                events.push({
+                    event: updated ? 'edit' : type,
+                    data
+                });
+            }
+
+            for (const id of state.current) {
+                if (!current.has(id)) state.pending.add(id);
+            }
+            state.current = current;
+            await this.checkMissing(state, watch, cookie, events);
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) return false;
+
+            if (!state.ready) {
+                state.since = started;
+                state.ready = true;
+            }
+            for (const { event, data } of events) {
+                if (this.contentWatch !== watch) break;
+                this.emit(event, data);
+            }
+            if (type === 'post') {
+                for (const post of list) {
+                    if (this.contentWatch !== watch) break;
+                    await this.safe(() => this.checkComments(post, watch));
+                }
+            }
+            return true;
+        } catch (error) {
+            for (const record of state.records.values()) record.missing = 0;
+            throw error;
+        } finally {
+            watch.loading.delete(type);
         }
+    }
 
-        if (this.post === post.titleNo) {
-            return false;
+    async checkMissing(state, watch, cookie, events) {
+        for (const id of [...state.pending].slice(0, 10)) {
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) return;
+            const record = state.records.get(id);
+            state.pending.delete(id);
+            if (!record || record.removed) continue;
+            let result;
+            try {
+                result = await http.getContent(watch.bjId, id, { cookie: this.cookie });
+            } catch (error) {
+                record.missing = 0;
+                state.pending.add(id);
+                this.emit('error', error);
+                continue;
+            }
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+                record.missing = 0;
+                state.pending.add(id);
+                return;
+            }
+            const { status, data } = result;
+            if (status === 515 && Number(data?.code) === 1380) {
+                record.missing++;
+                if (record.missing < 2) {
+                    state.pending.add(id);
+                    continue;
+                }
+                record.removed = true;
+                state.comments.delete(id);
+                events.push({ event: 'remove', data: record.data });
+                continue;
+            }
+            record.missing = 0;
+            const auth = Number(data?.auth_no);
+            if (status === 200 && String(data?.title_no) === id
+                && [101, 102].includes(auth)) {
+                if (record.auth !== auth && (record.auth !== null || auth === 102)) {
+                    events.push({ event: 'visibility', data: {
+                        ...record.data, public: auth === 101
+                    }});
+                }
+                record.auth = auth;
+            } else {
+                state.pending.add(id);
+            }
         }
+    }
 
-        this.post = post.titleNo;
+    startContent() {
+        if (!this.bjId) return Promise.resolve(false);
+        if (this.contentWatch?.bjId === this.bjId) {
+            return this.contentWatch.ready;
+        }
+        this.stopContent();
 
-        const url = new URL(
-            `/station/${this.bjId}/post/${post.titleNo}`,
-            DOMAIN.soop
-        );
-
-        this.emit('post', {
+        const types = ['post', 'clip', 'catch'];
+        if (!this.contentStates.has(this.bjId)) {
+            this.contentStates.set(this.bjId, new Map(types.map(type => [type, {
+                ready: false, since: 0, items: new Map(), comments: new Map(),
+                records: new Map(), current: new Set(), pending: new Set()
+            }])));
+        }
+        const watch = {
             bjId: this.bjId,
-            bjNick: post.userNick,
-            titleNo: post.titleNo,
-            title: post.titleName,
-            content: post.content,
-            regDate: post.regDate,
-            url: url.href
-        });
+            states: this.contentStates.get(this.bjId),
+            loading: new Set(),
+            timer: null,
+            ready: null
+        };
+        this.contentWatch = watch;
+        const check = () => Promise.all(types.map(type =>
+            this.safe(() => this.checkContent(type))
+        ));
+        watch.ready = check();
+        watch.timer = setInterval(check, 120000);
+        return watch.ready;
+    }
 
-        return post;
+    stopContent() {
+        if (!this.contentWatch) return false;
+        clearInterval(this.contentWatch.timer);
+        this.contentWatch = null;
+        return true;
     }
 
     startPost() {
-        this.stopPost();
-
-        this.postTimer = setInterval(() => {
-            this.safe(() => this.checkPost());
-        }, 120000);
+        return this.startContent();
     }
 
     stopPost() {
-        if (!this.postTimer) {
-            return false;
+        return this.stopContent();
+    }
+
+    async sendCommentList(titleNo, bjId = this.bjId) {
+        const options = { cookie: this.cookie };
+        const parents = new Map();
+        let total = null;
+        let lastPage = 1;
+
+        for (let page = 1; page <= lastPage; page++) {
+            const result = await http.getComments(bjId, titleNo, page, options);
+            if (!Array.isArray(result?.data) || !result.meta) return null;
+            const meta = result.meta;
+            if (!Number.isInteger(meta.total) || meta.total < 0
+                || !Number.isInteger(meta.last_page) || meta.last_page < 1
+                || meta.last_page > 20 || Number(meta.current_page) !== page
+                || (result.hidden_list?.length ?? 0) > 0) return null;
+            if (total !== null && (total !== meta.total || lastPage !== meta.last_page)) {
+                return null;
+            }
+            total = meta.total;
+            lastPage = meta.last_page;
+            for (const item of result.data) {
+                if (!item.p_comment_no) return null;
+                parents.set(String(item.p_comment_no), item);
+            }
         }
+        if (parents.size !== total) return null;
 
-        clearInterval(this.postTimer);
-        this.postTimer = null;
+        const comments = [];
+        for (const item of parents.values()) {
+            comments.push({ ...item, commentNo: item.p_comment_no, parentCommentNo: null });
+            const count = Number(item.c_comment_cnt);
+            if (!Number.isInteger(count) || count < 0) return null;
+            if (!count) continue;
+            const replies = await http.getReplies(bjId, titleNo, item.p_comment_no, options);
+            if (!Array.isArray(replies?.data) || replies.data.length !== count
+                || (replies.reply_hidden_list?.length ?? 0) > 0) return null;
+            const ids = new Set();
+            for (const reply of replies.data) {
+                if (!reply.c_comment_no || ids.has(String(reply.c_comment_no))) return null;
+                ids.add(String(reply.c_comment_no));
+                comments.push({ ...reply, commentNo: reply.c_comment_no,
+                    parentCommentNo: item.p_comment_no });
+            }
+        }
+        return comments;
+    }
 
+    async checkComments(post, watch = this.contentWatch) {
+        if (!post?.titleNo || !watch || this.contentWatch !== watch) return false;
+        const states = watch.states.get('post').comments;
+        const id = String(post.titleNo);
+        const previous = states.get(id);
+        const cookie = http.cookieString(this.cookie);
+        const auth = crypto.createHash('sha256').update(cookie).digest('hex');
+        let list;
+        try {
+            list = await this.sendCommentList(post.titleNo, watch.bjId);
+        } catch (error) {
+            previous?.missing.clear();
+            throw error;
+        }
+        if (!Array.isArray(list)) previous?.missing.clear();
+        if (!Array.isArray(list) || this.contentWatch !== watch
+            || cookie !== http.cookieString(this.cookie)) return false;
+
+        const baseline = !previous || previous.auth !== auth;
+        const state = baseline ? { auth, items: new Map(), missing: new Map() } : previous;
+        const current = new Map();
+        const events = [];
+        for (const item of list) {
+            const key = `${item.parentCommentNo ?? 0}:${item.commentNo}`;
+            const data = {
+                bjId: watch.bjId, titleNo: post.titleNo, title: post.titleName,
+                commentNo: item.commentNo, parentCommentNo: item.parentCommentNo,
+                userId: item.user_id, userNick: item.user_nick,
+                message: item.comment, regDate: item.reg_date,
+                url: new URL(`/station/${watch.bjId}/post/${post.titleNo}`, DOMAIN.soop).href
+            };
+            const signature = JSON.stringify([item.comment, item.photo ?? null,
+                item.tag_user_id ?? '', item.tag_user_nick ?? '']);
+            const old = state.items.get(key);
+            current.set(key, { signature, data });
+            state.missing.delete(key);
+            if (baseline) continue;
+            if (!old) events.push({ event: 'comment', data });
+            else if (old.signature !== signature) {
+                events.push({ event: 'update', data: { ...data, before: old.data } });
+            }
+        }
+        for (const [key, old] of state.items) {
+            if (current.has(key)) continue;
+            const count = (state.missing.get(key) ?? 0) + 1;
+            if (count < 2) {
+                state.missing.set(key, count);
+                current.set(key, old);
+            } else {
+                state.missing.delete(key);
+                events.push({ event: 'delete', data: old.data });
+            }
+        }
+        state.items = current;
+        states.set(id, state);
+        for (const { event, data } of events) {
+            if (this.contentWatch !== watch) break;
+            this.emit(event, data);
+        }
         return true;
     }
 
@@ -736,6 +1044,7 @@ export class SoopClient {
             const finish = result => {
                 if (settled) return;
                 settled = true;
+                clearTimeout(timeout);
 
                 this.off('error', onError);
                 this.off('open', onOpen);
@@ -749,6 +1058,15 @@ export class SoopClient {
 
             const onError = () => finish(false);
             const onOpen = () => finish(true);
+            const timeout = setTimeout(() => {
+                try {
+                    this.emit('error', new Error(
+                        '브릿지 입장 시간이 초과되었습니다.'
+                    ));
+                } finally {
+                    finish(false);
+                }
+            }, 10000);
 
             this.on('error', onError);
             this.on('open', onOpen);
@@ -1130,6 +1448,44 @@ export class SoopClient {
         return result;
     }
 
+    async sendStream(quality = 'hd') {
+        return http.getStream(this.bjId, quality, {
+            cookie: this.cookie,
+            password: this.broadPw,
+        });
+    }
+
+    async startPackage(quality = 'original') {
+        if (this.package) {
+            return this.package.change(quality);
+        }
+
+        const media = new Package(this, quality);
+        this.package = media;
+        media.on('open', data => this.emit('packageOpen', data));
+        media.on('quality', data => this.emit('packageQuality', data));
+        media.on('media', data => this.emit('media', data));
+        media.on('error', error => this.emit('packageError', error));
+        media.on('close', data => {
+            if (this.package === media) this.package = null;
+            this.emit('packageClose', data);
+        });
+
+        try {
+            return await media.connect();
+        } catch (error) {
+            media.fail(error);
+            throw error;
+        }
+    }
+
+    stopPackage() {
+        const media = this.package;
+        if (!media) return false;
+        this.package = null;
+        return media.close();
+    }
+
     async sendBroad() {
         const result = (
             await http.getSection(
@@ -1141,15 +1497,47 @@ export class SoopClient {
         return result;
     }
 
-    async sendPostList() {
+    async sendPostList(bjId = this.bjId) {
         const result = (
-            await http.getSection(
-            this.bjId,
-            'post',
+            await http.getBoard(
+            bjId,
+            { perPage: 20 },
             { cookie: this.cookie }
         ));
 
-        return result?.posts;
+        if (!Array.isArray(result?.data)) return null;
+        const posts = new Map();
+        const notices = Array.isArray(result.notice_data) ? result.notice_data : [];
+
+        for (const item of [...result.data, ...notices]) {
+            if (!item?.title_no || item.ucc) continue;
+            posts.set(String(item.title_no), item);
+        }
+
+        return [...posts.values()].map(item => ({
+            titleNo: item.title_no,
+            titleName: item.title_name,
+            userId: item.user_id,
+            userNick: item.user_nick,
+            authNo: item.auth_no,
+            content: item.content?.content ?? item.content?.text_content ?? '',
+            photos: (item.photos ?? []).map(photo => photo.url),
+            regDate: item.reg_date
+        }));
+    }
+
+    async sendClipList(bjId = this.bjId) {
+        const result = await http.getVod(bjId, 'clip', {
+            cookie: this.cookie
+        });
+        return result?.contents;
+    }
+
+    async sendCatchList(bjId = this.bjId) {
+        const result = await http.getVod(bjId, 'catch', {
+            cookie: this.cookie
+        });
+        return result?.contents;
     }
 
     findLastPost(data = []) {
@@ -1585,7 +1973,7 @@ export class SoopClient {
 
         for (const type of ['default', 'subscribe']) {
             
-        const section = data[type];
+        const section = data?.[type];
 
         if (!section) continue;
 

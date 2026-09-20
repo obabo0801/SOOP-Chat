@@ -82,6 +82,121 @@ export async function postLiveInfo(bjId, options = {}) {
     return json?.CHANNEL;
 }
 
+export async function getStream(bjId, quality = 'hd', options = {}) {
+    const referer = new URL(
+        `/${encodeURIComponent(bjId)}`,
+        DOMAIN.play
+    );
+
+    const headers = {
+        Referer: referer.href,
+        Origin: DOMAIN.play,
+        'User-Agent': USER_AGENT,
+    };
+
+    const channel = await postLiveInfo(bjId, {
+        ...options,
+        headers: {
+            ...options.headers,
+            ...headers
+        }
+    });
+
+    if (Number(channel?.RESULT) !== 1
+        || !channel?.BNO || !channel?.RMD) {
+        return null;
+    }
+
+    const preset = channel.VIEWPRESET?.find(item =>
+        item.name === quality && item.name !== 'auto'
+    );
+
+    if (!preset) {
+        throw new Error(
+            '지원하지 않는 방송 화질입니다.'
+        );
+    }
+
+    const url = new URL(
+        '/afreeca/player_live_api.php',
+        DOMAIN.live
+    );
+
+    const body = new URLSearchParams({
+        bid: bjId,
+        bno: channel.BNO,
+        type: 'aid',
+        pwd: options.password || '',
+        quality,
+        from_api: 0,
+        mode: 'landing',
+        player_type: 'html5',
+        stream_type: 'common',
+    });
+
+    const auth = await requestJson(url, {
+        ...options,
+        headers: {
+            ...options.headers,
+            ...headers
+        },
+        method: 'POST',
+        body
+    });
+
+    if (Number(auth?.CHANNEL?.RESULT) !== 1
+        || !auth?.CHANNEL?.AID) {
+        return null;
+    }
+
+    let cdn = channel.CDN;
+
+    if (cdn?.includes('gs_cdn')) {
+        cdn = 'gs_cdn_pc_web';
+    } else if (cdn?.includes('lg_cdn')) {
+        cdn = 'lg_cdn_pc_web';
+    }
+
+    if (!cdn) {
+        return null;
+    }
+
+    const assign = new URL(
+        '/broad_stream_assign.html',
+        channel.RMD
+    );
+
+    assign.search = new URLSearchParams({
+        return_type: cdn,
+        broad_key: `${channel.BNO}-common-${quality}-hls`,
+    }).toString();
+
+    const stream = await requestJson(assign, {
+        method: 'GET',
+        headers
+    });
+
+    if (!stream?.view_url) {
+        return null;
+    }
+
+    const source = new URL(stream.view_url);
+
+    if (!['http:', 'https:'].includes(source.protocol)) {
+        return null;
+    }
+
+    source.searchParams.set('aid', auth.CHANNEL.AID);
+
+    return {
+        bjId,
+        broadNo: Number(channel.BNO),
+        quality,
+        url: source.href,
+        headers,
+    };
+}
+
 export async function getPrivateInfo(options = {}) {
     const url = new URL(
         '/api/get_private_info.php',
@@ -181,6 +296,21 @@ export async function getMyPlus(options = {}) {
     return json?.DATA;
 }
 
+export async function getChannel(bjId, chip, options = {}) {
+    const url = new URL(
+        `/v1.1/channel/${encodeURIComponent(bjId)}`
+        + `/${chip}`,
+        DOMAIN.channel
+    );
+
+    const json = await requestJson(url, {
+        ...options,
+        method: 'GET'
+    });
+
+    return json;
+}
+
 export async function getSection(bjId, chip, options = {}) {
     const url = new URL(
         `/v1.1/channel/${encodeURIComponent(bjId)}`
@@ -194,6 +324,14 @@ export async function getSection(bjId, chip, options = {}) {
     });
 
     return json;
+}
+
+export async function getVod(bjId, chip = '', options = {}) {
+    return getChannel(
+        bjId,
+        `vod/${chip}`,
+        options
+    );
 }
 
 export async function getBoard(bjId, {
@@ -230,6 +368,41 @@ export async function getBoard(bjId, {
     });
 
     return json;
+}
+
+export async function getContent(bjId, titleNo, options = {}) {
+    const url = new URL(
+        `/api/${encodeURIComponent(bjId)}/title/${encodeURIComponent(titleNo)}`,
+        DOMAIN.chapi
+    );
+    const response = await fetch(url, {
+        headers: {
+            Accept: AGENT,
+            'User-Agent': USER_AGENT,
+            ...(options.cookie ? { Cookie: cookieString(options.cookie) } : {})
+        },
+        signal: AbortSignal.timeout(10000)
+    });
+    const data = await response.json();
+    return { status: response.status, data };
+}
+
+export async function getComments(bjId, titleNo, page = 1, options = {}) {
+    const url = new URL(
+        `/api/${encodeURIComponent(bjId)}/title/${encodeURIComponent(titleNo)}/comment`,
+        DOMAIN.chapi
+    );
+    url.searchParams.set('page', page);
+    return requestJson(url, { ...options, method: 'GET' });
+}
+
+export async function getReplies(bjId, titleNo, commentNo, options = {}) {
+    const url = new URL(
+        `/api/${encodeURIComponent(bjId)}/title/${encodeURIComponent(titleNo)}`
+        + `/comment/${encodeURIComponent(commentNo)}/reply`,
+        DOMAIN.chapi
+    );
+    return requestJson(url, { ...options, method: 'GET' });
 }
 
 export async function getPoll(bjId, surveyNo, options = {}) {

@@ -6,6 +6,7 @@ export class Bridge {
         this.ws = null;
         this.cert = null;
         this.ping = null;
+        this.viewer = null;
     }
 
     get url() {
@@ -26,6 +27,7 @@ export class Bridge {
         }
 
         this.ws = new WebSocket(this.url, 'bridge');
+        this.viewer = null;
 
         await this.open();
 
@@ -60,12 +62,16 @@ export class Bridge {
             this.ws.on('close', (code, reason) => {
                 clearTimeout(timeout);
                 this.stopPing();
+                reject(new Error(
+                    '브릿지 연결이 완료되기 전에 연결이 종료되었습니다.'
+                ));
             });
         });
     }
 
     close() {
         this.stopPing();
+        this.viewer = null;
 
         if (this.ws) {
             this.ws.close();
@@ -164,12 +170,21 @@ export class Bridge {
             break;
 
         case 'GETUSERCNTEX':
+            if (packet.RESULT === 0) {
+                this.onViewer(DATA);
+            }
             break;
 
         case 'GETBJADCON':
             break;
 
         case 'GETITEM_SELL':
+            break;
+
+        case 'TRANSLATED_TITLES':
+            break;
+
+        case 'WAITBJSESS':
             break;
 
         default:
@@ -215,6 +230,50 @@ export class Bridge {
         this.client.updateBroadcast(data);
     }
 
+    onViewer(data = {}) {
+        const values = [
+            data?.uiMainChPCUser,
+            data?.uiSubChPCUser,
+            data?.uiMainChMBUser,
+            data?.uiSubChMBUser,
+        ];
+
+        if (values.some(value =>
+            value === null
+            || value === undefined
+            || String(value).trim() === ''
+        )) return;
+
+        const counts = values.map(Number);
+
+        if (counts.some(count =>
+            !Number.isSafeInteger(count) || count < 0
+        )) return;
+
+        const pc = counts[0] + counts[1];
+        const mobile = counts[2] + counts[3];
+        const broadNo = Number(data.uiBroadNo);
+
+        if (!Number.isSafeInteger(broadNo)
+            || broadNo <= 0) return;
+
+        const prev = this.viewer;
+
+        if (prev?.broadNo === broadNo
+            && prev.pc === pc
+            && prev.mobile === mobile) return;
+
+        this.viewer = { broadNo, pc, mobile };
+
+        this.client.emit('viewer', {
+            bjId: this.client.bjId,
+            broadNo,
+            total: pc + mobile,
+            pc,
+            mobile,
+        });
+    }
+
     onClose(data = {}) {
         if (data.pcEndingMsg) {
             this.client.endingMsg(
@@ -258,7 +317,7 @@ export class Bridge {
             DATA: {
                 center_ip: c.CTIP,
                 center_port: Number(c.CTPT),
-                passwd: this.client.broadPw,
+                passwd: this.client.broadPw || '',
                 QUALITY: 'normal',
                 cli_type: 41,
                 cc_cli_type: 19,

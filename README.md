@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-green">
   <img src="https://img.shields.io/badge/node.js-24.16.0-brightgreen">
-  <img src="https://img.shields.io/badge/version-v1.0.1-blue">
+  <img src="https://img.shields.io/badge/version-v1.0.3-blue">
   <img src="https://img.shields.io/badge/status-experimental-orange">
 </p>
 
@@ -31,6 +31,19 @@ git@github.com:obabo0801/SOOP-Chat.git
 
 <details>
 <summary>❗ 업데이트 내역</summary>
+
+## ❗ 버전 1.0.3
+- 게시글, 클립, 캐치 알림 개선
+  - 삭제 및 공개 상태 변경 알림 추가
+  - 게시글 삭제 시 잘못된 알림 수정
+  - 방송 대기 중 알림 유지
+- 댓글과 답글 작성, 수정, 삭제 알림 추가
+- PC, 모바일 시청자 수 변경 이벤트 추가
+- 방송 스트림 조회 및 숲 패키지 연결 추가
+  - 화질 변경 및 오류 시 재연결 처리
+- OGQ 선물 수신자 표시 오류 수정
+- 방송 정보 갱신, 로그인 및 연결 오류 처리 개선
+- 환경변수 처리 및 배포 파일 구성 개선
 
 ## ❗ 버전 1.0.2
 - 브라우저 로그인 기능 추가
@@ -77,8 +90,11 @@ Node.js 기반 채팅 클라이언트입니다.
 - 참여자 목록 및 입퇴장 처리
 - 별풍선, 스티커, 애드벌룬 선물 알림
 - 구독권, 퀵뷰, OGQ 선물 알림
-- 투표, 도전·대결미션, 자막 이벤트 처리
-- 스트리머 새 게시글 알림
+- 투표, 도전, 대결미션, 자막 이벤트 처리
+- 게시글, 클립, 캐치 변경 알림
+- 댓글과 답글 변경 알림
+- 시청자 수 변경 알림
+- 방송 스트림 조회 및 숲 패키지 연결
 - 로그인, 2차 로그인, 로그아웃 지원
 - 콘솔 명령어 테스트 지원
 
@@ -87,6 +103,7 @@ Node.js 기반 채팅 클라이언트입니다.
 ## 🛠 개발 환경
 - Node.js (ESM)
 - dotenv 17.4.2
+- playwright 1.62.1
 - ws 8.21.0
 
 ---
