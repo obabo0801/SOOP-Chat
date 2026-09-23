@@ -3,6 +3,7 @@ import readline from 'readline';
 import { SoopClient } from '#soop/client';
 import * as http from '#soop/http';
 import * as log from '#utils/log';
+import * as weflab from '#utils/weflab';
 import { parseEnv } from '#utils/env';
 import { load, get } from '#utils/config';
 config({ quiet: true });
@@ -1391,6 +1392,53 @@ async function command(cmd) {
             }[mode];
 
             log.info('[모드]', `${name}만 표시합니다.`);
+            break;
+        }
+
+        case '/룰렛':
+        case '/roulette': {
+            const count = Number(args[0]);
+            const user = getConfig('weflab');
+
+            if (!user) {
+                log.warn(
+                    '[룰렛]',
+                    'config.json에 weflab을 설정해주세요.'
+                );
+                break;
+            }
+
+            if (
+                !Number.isInteger(count)
+                || count < 1
+            ) {
+                log.warn(
+                    '[명령어]',
+                    '/룰렛 후원개수'
+                );
+                break;
+            }
+
+            const result = await weflab.roulette(
+                user,
+                count
+            );
+
+            const items = [...result.items]
+                .sort(
+                    (a, b) =>
+                        b.rate - a.rate
+                )
+                .map(
+                    item =>
+                        `${item.name} ${item.rate}%`
+                )
+                .join('\n');
+
+            log.load(
+                `룰렛 ${count}\n${items}`
+            );
+
             break;
         }
         

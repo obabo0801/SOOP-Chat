@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-green">
   <img src="https://img.shields.io/badge/node.js-24.16.0-brightgreen">
-  <img src="https://img.shields.io/badge/version-v1.0.3-blue">
+  <img src="https://img.shields.io/badge/version-v1.0.4-blue">
   <img src="https://img.shields.io/badge/status-experimental-orange">
 </p>
 
@@ -31,6 +31,10 @@ git@github.com:obabo0801/SOOP-Chat.git
 
 <details>
 <summary>❗ 업데이트 내역</summary>
+
+❗ 버전 1.0.4
+- Weflab 룰렛 확률 조회 기능 추가
+  - /룰렛 개수 명령어 지원
 
 ## ❗ 버전 1.0.3
 - 게시글, 클립, 캐치 알림 개선
@@ -95,6 +99,7 @@ Node.js 기반 채팅 클라이언트입니다.
 - 댓글과 답글 변경 알림
 - 시청자 수 변경 알림
 - 방송 스트림 조회 및 숲 패키지 연결
+- Weflab 룰렛 확률 조회
 - 로그인, 2차 로그인, 로그아웃 지원
 - 콘솔 명령어 테스트 지원
 
@@ -188,6 +193,7 @@ npx playwright install chromium
 | `auto` | 방송 대기 연결 |
 | `delay` | 자동 대기 연결 시간 |
 | `cookie` | 로그인 쿠키 .A32··· |
+| `weflab` | Weflab 사용자 ID |
 | `isLink` | 이모티콘 링크 표시 |
 | `isList` | 참여자 목록 표시 |
 | `pver` | 참여자 목록 및 입퇴장 수신 |
@@ -207,6 +213,7 @@ npx playwright install chromium
 | `/채팅 내용` | 일반 채팅 전송 |
 | `/매니저 내용` | 매니저 채팅 전송 |
 | `/귓속말 아이디 내용` | 귓속말 전송 |
+| `/룰렛 개수` | Weflab 룰렛 확률 조회 |
 | `/참여인원` | 현재 참여자 목록 요청 |
 | `/강퇴인원` | 강퇴 목록 요청 |
 | `/자막 번호` | 자막 언어 변경 |
