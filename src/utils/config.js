@@ -4,7 +4,11 @@ let config = null;
 
 export function load(name) {
     const path = file.find(name);
-    if (!path) return;
+
+    if (!path) {
+        return;
+    }
+
     config = file.json(path);
 }
 

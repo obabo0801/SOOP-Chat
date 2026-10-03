@@ -91,7 +91,7 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
     const headers = {
         Referer: referer.href,
         Origin: DOMAIN.play,
-        'User-Agent': USER_AGENT,
+        'User-Agent': options.headers?.['User-Agent'] || USER_AGENT,
     };
 
     const channel = await postLiveInfo(bjId, {
@@ -376,14 +376,17 @@ export async function getContent(bjId, titleNo, options = {}) {
         DOMAIN.chapi
     );
     const response = await fetch(url, {
+        dispatcher: options.dispatcher,
         headers: {
             Accept: AGENT,
-            'User-Agent': USER_AGENT,
+            'User-Agent': options.headers?.['User-Agent'] || USER_AGENT,
+            ...options.headers,
             ...(options.cookie ? { Cookie: cookieString(options.cookie) } : {})
         },
         signal: AbortSignal.timeout(10000)
     });
     const data = await response.json();
+
     return { status: response.status, data };
 }
 
@@ -393,6 +396,7 @@ export async function getComments(bjId, titleNo, page = 1, options = {}) {
         DOMAIN.chapi
     );
     url.searchParams.set('page', page);
+
     return requestJson(url, { ...options, method: 'GET' });
 }
 
@@ -402,6 +406,7 @@ export async function getReplies(bjId, titleNo, commentNo, options = {}) {
         + `/comment/${encodeURIComponent(commentNo)}/reply`,
         DOMAIN.chapi
     );
+
     return requestJson(url, { ...options, method: 'GET' });
 }
 
@@ -754,7 +759,9 @@ export async function postLogin(body, options = {}) {
         body
     });
 
-    if (!raw) return false;
+    if (!raw) {
+        return false;
+    }
 
     const text = await raw.text();
     const data = JSON.parse(text);
@@ -829,6 +836,11 @@ export async function requestRaw(url, options = {}) {
     }
 
     const res = await fetch(url, {
+        dispatcher: options.dispatcher,
+        signal: (options.signal
+            ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)])
+            : AbortSignal.timeout(15000)
+        ),
         method,
         headers,
         body
@@ -843,17 +855,26 @@ export async function requestRaw(url, options = {}) {
 
 export async function requestText(url, options = {}) {
     const res = await requestRaw(url, options);
-    if (!res) return null;
+
+    if (!res) {
+        return null;
+    }
 
     const text = await res.text();
-    if (!text) return null;
+
+    if (!text) {
+        return null;
+    }
 
     return text;
 }
 
 export async function requestJson(url, options = {}) {
     const text = await requestText(url, options);
-    if (!text) return null;
+
+    if (!text) {
+        return null;
+    }
 
     try {
         return JSON.parse(text);
@@ -875,7 +896,9 @@ export function cookieExtract(data) {
 }
 
 export function cookieString(cookie = {}) {
-    if (!cookie) return '';
+    if (!cookie) {
+        return '';
+    }
 
     if (typeof cookie === 'string') {
         return cookie;
@@ -892,7 +915,9 @@ export function cookieString(cookie = {}) {
 }
 
 export function cookieJson(cookie) {
-    if (!cookie) return {};
+    if (!cookie) {
+        return {};
+    }
 
     const result = {};
     const cookies = (
@@ -908,7 +933,10 @@ export function cookieJson(cookie) {
         .filter(Boolean)
         .forEach(v => {
             const index = v.indexOf('=');
-            if (index <= 0) return;
+
+            if (index <= 0) {
+                return;
+            }
 
             const key = v.slice(
                 0, index

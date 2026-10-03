@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # SOOP browser authentication
 /browser.json
+
+/browser-*.json
+/tenants.json

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import * as log from '#utils/log';
 
 const HOME_URL = 'https://www.sooplive.com/';
@@ -78,24 +78,63 @@ async function waitForAuthTicket(
 
 export async function getSoopCookie({
     forceLogin = false,
-    timeout = 5 * 60 * 1000
+    timeout = 5 * 60 * 1000,
+    browserType = 'chromium',
+    authFile = AUTH_FILE,
+    proxy,
+    userAgent,
+    signal
 } = {}) {
+    signal?.throwIfAborted();
+
     const saved = (
         !forceLogin
-        && fs.existsSync(AUTH_FILE)
+        && fs.existsSync(authFile)
     );
 
-    const browser = await chromium.launch({
-        headless: false
+    const engine = {
+        chromium, firefox, webkit,
+        msedge: chromium
+    }[browserType];
+
+    if (!engine) {
+        throw new Error('지원하지 않는 브라우저입니다.');
+    }
+
+    const proxyUrl = (
+        proxy ? new URL(proxy) : null
+    );
+
+    const browser = await engine.launch({
+        headless: false,
+        ...(browserType === 'msedge' ? {
+            channel: 'msedge'
+        } : {}),
+        ...(proxyUrl ? {
+            proxy: {
+                server: `${proxyUrl.protocol}//${proxyUrl.host}`,
+                username: decodeURIComponent(proxyUrl.username),
+                password: decodeURIComponent(proxyUrl.password)
+            }
+        } : {})
     });
 
-    const context = await browser.newContext(
-        saved
-            ? { storageState: AUTH_FILE }
-            : {}
-    );
+    const aborted = () => {
+        void browser.close().catch(() => {});
+    };
+
+    signal?.addEventListener('abort', aborted, { once: true });
+
+    let context;
 
     try {
+        signal?.throwIfAborted();
+
+        context = await browser.newContext({
+            ...(saved ? { storageState: authFile } : {}),
+            ...(userAgent ? { userAgent } : {})
+        });
+
         const page = await context.newPage();
 
         if (saved) {
@@ -108,7 +147,7 @@ export async function getSoopCookie({
 
             if (cookie.AuthTicket) {
                 await context.storageState({
-                    path: AUTH_FILE
+                    path: authFile
                 });
 
                 return cookie;
@@ -146,12 +185,14 @@ export async function getSoopCookie({
         }
 
         await context.storageState({
-            path: AUTH_FILE
+            path: authFile
         });
 
         return cookie;
     } finally {
-        await context.close()
+        signal?.removeEventListener('abort', aborted);
+
+        await context?.close()
             .catch(() => {});
 
         if (browser.isConnected()) {

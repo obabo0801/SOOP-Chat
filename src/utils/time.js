@@ -6,6 +6,7 @@ export function format(ms) {
     const min = Math.floor(
         (total % 3600) / 60);
     const sec = total % 60;
+
     return { hour, min, sec };
 }
 
@@ -18,6 +19,7 @@ export function pad(n) {
 export function uptime(ms) {
     const { hour, min, sec
         } = format(ms);
+
     return (`${pad(hour)}:`
         + `${pad(min)}:`
         + `${pad(sec)}`

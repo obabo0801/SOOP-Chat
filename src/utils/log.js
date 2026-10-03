@@ -1,3 +1,6 @@
+import { Console } from 'console';
+import { Writable } from 'stream';
+import fs from 'fs';
 import * as file from '#utils/file';
 import * as time from '#utils/time';
 
@@ -41,6 +44,51 @@ const COLORS = Object.freeze({
     RESET: '\x1b[0m'
 });
 
+let buffered = false;
+const streams = new Map();
+
+export function buffer() {
+    fs.mkdirSync(file.get('logs'), { recursive: true });
+    buffered = true;
+}
+
+function write(data) {
+    const name = `logs/${time.getDate()}.log`;
+
+    if (!buffered) {
+        return file.append(name, data);
+    }
+
+    if (!streams.has(name)) {
+        const stream = fs.createWriteStream(file.get(name), { flags: 'a' });
+        stream.on('error', () => {
+            console.error('로그 기록 실패');
+        });
+
+        streams.set(name, stream);
+    }
+
+    streams.get(name).write(`${data}\n`);
+}
+
+export async function flush() {
+    await Promise.all([...streams.values()].map(stream => {
+        return new Promise((resolve, reject) => {
+            if (stream.errored) {
+                reject(stream.errored);
+
+                return;
+            }
+
+            stream.once('error', reject);
+            stream.end(resolve);
+        });
+    }));
+
+    streams.clear();
+    buffered = false;
+}
+
 function formatArgs(args) {
     return args
         .map(value => {
@@ -64,8 +112,7 @@ export function append(level, ...args) {
     const data = 
         `[${time.getTime()}] [${type}] ${arg}`;
 
-    return file.append(
-        `logs/${time.getDate()}.log`, data);
+    return write(data);
 }
 
 export function send(level, ...args) {
@@ -79,8 +126,7 @@ export function send(level, ...args) {
     const c = COLORS[type] ?? COLORS.RESET;
     l(`${c}${data}${COLORS.RESET}`);
 
-    return file.append(
-        `logs/${time.getDate()}.log`, data);
+    return write(data);
 }
 
 export function print(level, ...args) {
@@ -91,8 +137,20 @@ export function print(level, ...args) {
     const c = COLORS[type] ?? COLORS.RESET;
     l(`${c}${arg}${COLORS.RESET}`);
 
-    return file.append(
-        `logs/${time.getDate()}.log`, arg);
+    return write(arg);
+}
+
+export function table(data) {
+    const output = new Writable({
+        write(chunk, encoding, callback) {
+            process.stdout.write(
+                chunk.toString().replace('(index)', ' index '),
+                callback
+            );
+        }
+    });
+
+    new Console({ stdout: output }).table(data);
 }
 
 function stringify(data) {
@@ -111,9 +169,11 @@ export function strformat(commands, {
     first = '', last = '', col = 5,
     rows = [], join = ' ', line = '\n'} = {}) {
     const v = Object.values(commands);
+
     for (let i = 0; i < v.length; i += col) {
         rows.push(v.slice(i, i + col).join(join));
     }
+
     return `${first}${rows.join(line)}${last}`;
 }
 

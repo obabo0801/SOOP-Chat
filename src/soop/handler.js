@@ -12,6 +12,14 @@ import {
 } from '#soop/http';
 
 export function dispatch(soop, pkt) {
+    if (soop.idle && ![
+        SVC.LOGIN,
+        SVC.JOIN_CHANNEL,
+        SVC.QUIT_CHANNEL
+    ].includes(pkt.service)) {
+        return;
+    }
+
     const fields = pkt.fields;
 
     switch (pkt.service) {
@@ -52,6 +60,7 @@ export function dispatch(soop, pkt) {
         if (soop.rule) {
             soop.emit('rule', soop.rule);
         }
+
         break;
     }
 
@@ -92,7 +101,9 @@ export function dispatch(soop, pkt) {
     case SVC.CHUSER: {
         const list = userList(soop, fields);
 
-        if (!list) break;
+        if (!list) {
+            break;
+        }
 
         if (list.length > 1) {
             soop.emit('userList', list);
@@ -164,6 +175,7 @@ export function dispatch(soop, pkt) {
         } else {
             soop.direct = toId;
         }
+
         break;
     }
 
@@ -253,6 +265,7 @@ export function dispatch(soop, pkt) {
         } else {
             soop.iceMode = false;
         }
+
         break;
     }
 
@@ -443,7 +456,9 @@ export function dispatch(soop, pkt) {
     case SVC.KICK_USER_LIST: {
         const list = kickList(soop, fields);
 
-        if (!list) break;
+        if (!list) {
+            break;
+        }
 
         soop.emit('kickList', list);
         break;
@@ -778,6 +793,7 @@ export function dispatch(soop, pkt) {
         } else {
             soop.emit('battle', data);
         }
+
         break;
     }
 
@@ -801,7 +817,9 @@ export function dispatch(soop, pkt) {
         const userId = fields[0];
         const user = soop.userList.get(userId);
 
-        if (!user) break;
+        if (!user) {
+            break;
+        }
 
         Object.assign(
             user,
@@ -980,7 +998,9 @@ export function userList(soop, fields = []) {
         for (let i = 1; i < fields.length; i += 3) {
             const id = fields[i];
 
-            if (!id) continue;
+            if (!id) {
+                continue;
+            }
 
             const user = {
                 id,
@@ -1001,7 +1021,9 @@ export function userList(soop, fields = []) {
     if (type === -1) {
         const id = fields[1];
 
-        if (!id) return users;
+        if (!id) {
+            return users;
+        }
 
         const user = {
             id,
@@ -1029,7 +1051,9 @@ export function kickList(soop, fields = []) {
     for (let i = 0; i < fields.length; i += 6) {
         const userId = fields[i];
 
-        if (!userId) continue;
+        if (!userId) {
+            continue;
+        }
 
         const kick = {
             userId,
@@ -1079,6 +1103,7 @@ export function checkFlag(flag = '0|0') {
 
 export function checkFlag1(flag1 = 0) {
     flag1 = Number(flag1) || 0;
+
     return {
         isAdmin: hasFlag(flag1,
             USER_FLAG1.ADMIN
@@ -1124,6 +1149,7 @@ export function checkFlag1(flag1 = 0) {
 
 export function checkFlag2(flag2 = 0) {
     flag2 = Number(flag2) || 0;
+
     return {
         isGlobalPc: hasFlag(flag2,
             USER_FLAG2.GLOBAL_PC
@@ -1197,27 +1223,47 @@ export function userInfo(soop, flag = '0|0') {
 
     let role = '일반';
 
-    if (info.isBJ) role = '스트리머';
-    else if (info.isManager) role = '매니저';
-    else if (info.isTopFan) role = '열혈';
-    else if (info.isFanClub) role = '팬';
-    else if (info.isNightBot) role = '봇';
+    if (info.isBJ) {
+        role = '스트리머';
+    }
+    else if (info.isManager) {
+        role = '매니저';
+    }
+    else if (info.isTopFan) {
+        role = '열혈';
+    }
+    else if (info.isFanClub) {
+        role = '팬';
+    }
+    else if (info.isNightBot) {
+        role = '봇';
+    }
     else if (info.isAdmin
-        || info.isAdminChat) role = '운영자';
+        || info.isAdminChat) {
+        role = '운영자';
+    }
 
     let tier = 0;
 
-    if (info.isTier1) tier = 1;
-    else if (info.isTier2) tier = 2;
+    if (info.isTier1) {
+        tier = 1;
+    }
+    else if (info.isTier2) {
+        tier = 2;
+    }
 
     let tierName = '';
 
-    if (info.isTier1) tierName = (
-        soop.channel?.TIER1_NICK || '베이직'
-    );
-    else if (info.isTier2) tierName = (
-        soop.channel?.TIER2_NICK || '플러스'
-    );
+    if (info.isTier1) {
+        tierName = (
+            soop.channel?.TIER1_NICK || '베이직'
+        );
+    }
+    else if (info.isTier2) {
+        tierName = (
+            soop.channel?.TIER2_NICK || '플러스'
+        );
+    }
 
     return { role, tier, tierName, ...info };
 }
@@ -1225,12 +1271,16 @@ export function userInfo(soop, flag = '0|0') {
 export function tierName(soop, count = 0) {
     let tier = '';
 
-    if (count === 1) tier = (
-        soop.channel?.TIER1_NICK || '베이직'
-    );
-    else if (count === 2) tier = (
-        soop.channel?.TIER2_NICK || '플러스'
-    );
+    if (count === 1) {
+        tier = (
+            soop.channel?.TIER1_NICK || '베이직'
+        );
+    }
+    else if (count === 2) {
+        tier = (
+            soop.channel?.TIER2_NICK || '플러스'
+        );
+    }
 
     return tier;
 }

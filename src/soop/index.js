@@ -1,4 +1,5 @@
 export { SoopClient } from './client.js';
+export { SoopManager } from './manager.js';
 
 export * as http from './http.js';
 export * as packet from './packet.js';

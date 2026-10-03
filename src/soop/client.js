@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import crypto from 'crypto';
+import { Network } from '#soop/network';
 import { Bridge } from '#soop/bridge';
 import { Package } from '#soop/package';
 import * as http from '#soop/http';
@@ -8,7 +9,8 @@ import * as handler from '#soop/handler';
 
 import {
     DOMAIN,
-    ICE_AUTH
+    ICE_AUTH,
+    SVC
 } from '#soop/config';
 
 export class SoopClient {
@@ -35,6 +37,12 @@ export class SoopClient {
         this.recent = null;
         this.signature = null;
         this.ogq = null;
+
+        this.network = new Network(options);
+        this.idle = (
+            options.idle ?? false
+        );
+        this.connecting = null;
 
         this.init(options);
     }
@@ -116,6 +124,7 @@ export class SoopClient {
         }
 
         this.events.get(event).push(handler);
+
         return this;
     }
 
@@ -137,6 +146,7 @@ export class SoopClient {
         };
 
         this.on(event, wrapper);
+
         return this;
     }
 
@@ -163,7 +173,7 @@ export class SoopClient {
     }
     
     isOpen() {
-        return (this.ws
+        return Boolean(this.ws
             && this.ws.readyState === WebSocket.OPEN
         );
     }
@@ -172,10 +182,15 @@ export class SoopClient {
         const result = (
             await http.login(
             userId, password,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
-        if (!result) return 0;
+        if (!result) {
+            return 0;
+        }
 
         if (result.data.RESULT === -11) {
             return await this.secondLogin(
@@ -194,6 +209,7 @@ export class SoopClient {
         await this.loadBasics();
 
         this.info = await http.getPrivateInfo({
+            ...this.network.httpOptions,
             cookie: this.cookie
         });
 
@@ -204,10 +220,15 @@ export class SoopClient {
         const result = (
             await http.secondLogin(
             userId, secondPw,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
-        if (!result) return 0;
+        if (!result) {
+            return 0;
+        }
 
         if (result.data.RESULT !== 1) {
             return -2;
@@ -220,6 +241,7 @@ export class SoopClient {
         await this.loadBasics();
 
         this.info = await http.getPrivateInfo({
+            ...this.network.httpOptions,
             cookie: this.cookie
         });
 
@@ -232,7 +254,10 @@ export class SoopClient {
         }
 
         const result = await http.logout(
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         );
 
         const re = this.disconnect();
@@ -254,7 +279,22 @@ export class SoopClient {
         return true;
     }
 
-    async connect(bjId = '', broadPw = '') {
+    connect(bjId = '', broadPw = '') {
+        if (this.connecting) {
+            return this.connecting;
+        }
+
+        this.connecting = this.openConnection(bjId, broadPw)
+            .finally(() => {
+                this.connecting = null;
+            });
+
+        return this.connecting;
+    }
+
+    async openConnection(bjId = '', broadPw = '') {
+        this.signal?.throwIfAborted();
+
         if (this.isOpen()) {
             return false;
         }
@@ -262,27 +302,48 @@ export class SoopClient {
         if (!bjId) {
             bjId = this.bjId;
         }
+
         if (this.bjId !== bjId) {
             this.stopPackage();
         }
+
         this.bjId = bjId;
 
         if (!broadPw) {
             broadPw = this.broadPw;
         }
+
         this.broadPw = broadPw;
 
-        if (!bjId) return false;
+        if (!bjId) {
+            return false;
+        }
 
-        await this.startContent();
+        if (!this.idle) {
+            await this.startContent();
+        }
 
         await this.loadBasics();
+        this.signal?.throwIfAborted();
 
         if (!this.channel) {
             return false;
         }
 
-        await this.loadAssets();
+        if (this.idle) {
+            this.info = await http.getPrivateInfo({
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            });
+
+            if (this.cookie && Number(this.info?.IS_LOGIN) !== 1) {
+                throw new Error('인증 오류');
+            }
+        } else {
+            await this.loadAssets();
+        }
+
+        this.signal?.throwIfAborted();
 
         if (!this.isAuth()) {
             return false;
@@ -291,14 +352,19 @@ export class SoopClient {
         const check = (
             await this.connectBridge()
         );
+        this.signal?.throwIfAborted();
 
-        if (!check) return false;
+        if (!check) {
+            return false;
+        }
 
         const ws = (
             await this.connectWs()
         );
 
-        if (!ws) return false;
+        if (!ws) {
+            return false;
+        }
 
         return true;
     }
@@ -316,6 +382,7 @@ export class SoopClient {
                 this.emitAuto(2);
                 this.startLive();
             }
+
             return false;
         }
 
@@ -335,6 +402,7 @@ export class SoopClient {
             else if (!this.auto) {
                 this.emitAuto(3, options);
             }
+
             return false;
         }
 
@@ -348,17 +416,28 @@ export class SoopClient {
     }
 
     async openSocket() {
+        const ws = this.ws;
+        const signal = this.signal;
+
         await new Promise((resolve, reject) => {
             let settled = false;
 
             const finish = error => {
-                if (settled) return;
+                if (settled) {
+                    return;
+                }
+
                 settled = true;
                 clearTimeout(timeout);
                 this.off('join', done);
+                signal?.removeEventListener('abort', aborted);
 
-                if (error) reject(error);
-                else resolve(true);
+                if (error) {
+                    reject(error);
+                }
+                else {
+                    resolve(true);
+                }
             };
 
             const timeout = setTimeout(() => {
@@ -367,10 +446,20 @@ export class SoopClient {
                 ));
             }, 10000);
 
+            const aborted = () => finish(new Error('연결 취소'));
+
+            signal?.addEventListener('abort', aborted, { once: true });
+
             const done = async () => {
                 this.off('join', done);
 
                 try {
+                    if (this.idle) {
+                        finish();
+
+                        return;
+                    }
+
                     await this.sendClubColor(0);
 
                     if (this.pver !== 0) {
@@ -387,25 +476,44 @@ export class SoopClient {
 
             this.on('join', done);
 
-            this.ws.on('open', () => {
+            ws.on('open', () => {
+                if (this.ws !== ws || signal?.aborted) {
+                    return;
+                }
+
                 this.sendLogin();
                 this.startPing();
             });
 
-            this.ws.on('message', data => {
+            ws.on('message', data => {
+                if (this.ws !== ws || signal?.aborted) {
+                    return;
+                }
+
                 handler.dispatch(
                     this, 
                     packet.parse(data)
                 );
             });
 
-            this.ws.on('error', error => {
+            ws.on('error', error => {
                 finish(error);
-                this.emit('error', error);
+
+                if (this.ws === ws && !signal?.aborted) {
+                    this.emit('error', error);
+                }
             });
 
-            this.ws.on('close', () => {
-                this.stopPing();
+            ws.on('close', () => {
+                if (this.ws === ws) {
+                    this.stopPing();
+                    this.stopSession();
+
+                    if (this.auto) {
+                        this.startLive();
+                    }
+                }
+
                 finish(new Error(
                     '채팅 연결이 완료되기 전에 연결이 종료되었습니다.'
                 ));
@@ -418,17 +526,22 @@ export class SoopClient {
             this.channel
         );
 
-        if (!url) return false;
+        if (!url) {
+            return false;
+        }
         
         const headers = {
+            ...this.network.socketOptions.headers,
             ...(this.cookie ? {
                 Cookie: http.cookieString(this.cookie)
             } : {})
         };
 
         await this.sleep();
+        this.signal?.throwIfAborted();
 
         this.ws = new WebSocket(url, 'chat', {
+            ...this.network.socketOptions,
             headers
         });
 
@@ -437,9 +550,15 @@ export class SoopClient {
         } catch (error) {
             this.closeWs();
             this.closeBridge();
+
             throw error;
         }
-        this.startSession();
+
+        if (this.idle) {
+            this.stopLive();
+        } else {
+            this.startSession();
+        }
 
         return true;
     }
@@ -460,12 +579,14 @@ export class SoopClient {
     disconnect(show = true) {
         this.stopPackage();
         this.stopPing();
+
         if (!this.auto) {
             this.stopLive();
         }
 
         this.closeBridge();
         this.closeWs();
+
         if (!this.auto) {
             this.stopContent();
         }
@@ -477,6 +598,10 @@ export class SoopClient {
 
         if (this.ending) {
             data.message = this.ending;
+        }
+
+        if (this.idle && this.auto) {
+            this.startLive();
         }
 
         if (show) {
@@ -500,10 +625,20 @@ export class SoopClient {
         return true;
     }
 
+    async destroy() {
+        this.auto = false;
+        this.disconnect(false);
+        this.stopLive();
+        this.stopContent();
+        await this.network.close();
+    }
+
     makeChatUrl(channel = {}) {
         const { CHDOMAIN, CHPT, BJID } = channel;
 
-        if (!CHDOMAIN || !CHPT) return false;
+        if (!CHDOMAIN || !CHPT) {
+            return false;
+        }
 
         const port = `:${Number(CHPT) + 1}`;
         const domain = `${CHDOMAIN}${port}`;
@@ -515,29 +650,43 @@ export class SoopClient {
     }
 
     send(data, delay = this.delay) {
+        if (this.idle && ![
+            SVC.KEEPALIVE,
+            SVC.LOGIN,
+            SVC.JOIN_CHANNEL
+        ].includes(packet.parse(data).service)) {
+            return false;
+        }
+
         if (!this.isOpen()) {
             return false;
         }
 
+        const ws = this.ws;
+
         this.queue = this.queue.then(() => {
         return new Promise((resolve) => {
 
-            if (!this.isOpen()) {
+            if (this.ws !== ws || !this.isOpen() || this.signal?.aborted) {
                 resolve(false);
+
                 return;
             }
 
-            this.ws.send(data, error => {
+            ws.send(data, error => {
                 if (error) {
                     this.emit('error', error);
                     resolve(false);
+
                     return;
                 }
+
                 resolve(true);
             });
 
         })}).then(async (result) => {
             await this.sleep(delay);
+
             return result;
         });
 
@@ -592,7 +741,9 @@ export class SoopClient {
     }
 
     async checkLive() {
-        if (this.pending) return false;
+        if (this.pending) {
+            return false;
+        }
 
         if (!this.bjId && !this.auto) {
             return false;
@@ -606,7 +757,9 @@ export class SoopClient {
             await this.sendLiveInfo()
         );
 
-        if (!channel) return false;
+        if (!channel) {
+            return false;
+        }
 
         if (!this.isAuth(channel)) {
             return false;
@@ -628,6 +781,11 @@ export class SoopClient {
 
     startLive() {
         this.stopLive();
+
+        if (!this.auto
+            || (this.idle && this.isOpen())) {
+            return;
+        }
 
         this.liveTimer = setInterval(() => {
             this.safe(() => this.checkLive());
@@ -657,7 +815,9 @@ export class SoopClient {
             await this.sendLiveInfo()
         );
 
-        if (!channel) return false;
+        if (!channel) {
+            return false;
+        }
 
         if (channel.BNO === oldBno
             && channel.CHATNO === oldChatNo
@@ -718,15 +878,24 @@ export class SoopClient {
 
     contentTime(value = '') {
         const date = String(value).trim().replace(' ', 'T');
+
         return Date.parse(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(date)
             ? `${date}+09:00` : date);
     }
 
     async checkContent(type) {
         const watch = this.contentWatch;
-        if (!watch || watch.bjId !== this.bjId) return false;
+
+        if (!watch || watch.bjId !== this.bjId) {
+            return false;
+        }
+
         const state = watch.states.get(type);
-        if (!state || watch.loading.has(type)) return false;
+
+        if (!state || watch.loading.has(type)) {
+            return false;
+        }
+
         watch.loading.add(type);
 
         try {
@@ -738,14 +907,26 @@ export class SoopClient {
             const started = Math.floor(Date.now() / 1000) * 1000;
             const cookie = http.cookieString(this.cookie);
             const auth = crypto.createHash('sha256').update(cookie).digest('hex');
+
             if (state.auth !== auth) {
-                for (const record of state.records.values()) record.missing = 0;
+                for (const record of state.records.values()) {
+                    record.missing = 0;
+                }
+
                 state.auth = auth;
             }
+
             const list = await load[type]();
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) return false;
+
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+                return false;
+            }
+
             if (!Array.isArray(list)) {
-                for (const record of state.records.values()) record.missing = 0;
+                for (const record of state.records.values()) {
+                    record.missing = 0;
+                }
+
                 return false;
             }
 
@@ -755,10 +936,12 @@ export class SoopClient {
 
             const events = [];
             const current = new Set();
+
             for (const item of items) {
                 const id = String(item.titleNo);
                 current.add(id);
                 state.pending.delete(id);
+
                 const data = {
                     type, bjId: watch.bjId, bjNick: item.userNick,
                     titleNo: item.titleNo, title: item.titleName,
@@ -769,29 +952,38 @@ export class SoopClient {
                 };
                 const record = state.records.get(id);
                 const auth = Number(item.authNo);
+
                 if (state.ready && record && [101, 102].includes(auth)
                     && record.auth !== null && record.auth !== auth) {
                     events.push({ event: 'visibility', data: {
                         ...data, public: auth === 101
                     }});
                 }
+
                 state.records.set(id, {
                     data, auth: [101, 102].includes(auth) ? auth : record?.auth ?? null,
                     missing: 0, removed: false
                 });
+
                 const signature = JSON.stringify([
                     item.titleName, item.content ?? '', item.photos ?? []
                 ]);
                 const previous = state.items.get(id);
                 state.items.set(id, signature);
 
-                if (!state.ready) continue;
+                if (!state.ready) {
+                    continue;
+                }
+
                 const updated = type === 'post' && previous !== undefined
                     && previous !== signature;
                 const time = this.contentTime(item.regDate);
                 const created = previous === undefined && Number.isFinite(time)
                     && time >= state.since && time <= Date.now();
-                if (!updated && !created) continue;
+
+                if (!updated && !created) {
+                    continue;
+                }
 
                 events.push({
                     event: updated ? 'edit' : type,
@@ -800,29 +992,47 @@ export class SoopClient {
             }
 
             for (const id of state.current) {
-                if (!current.has(id)) state.pending.add(id);
+                if (!current.has(id)) {
+                    state.pending.add(id);
+                }
             }
+
             state.current = current;
             await this.checkMissing(state, watch, cookie, events);
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) return false;
+
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+                return false;
+            }
 
             if (!state.ready) {
                 state.since = started;
                 state.ready = true;
             }
+
             for (const { event, data } of events) {
-                if (this.contentWatch !== watch) break;
+                if (this.contentWatch !== watch) {
+                    break;
+                }
+
                 this.emit(event, data);
             }
+
             if (type === 'post') {
                 for (const post of list) {
-                    if (this.contentWatch !== watch) break;
+                    if (this.contentWatch !== watch) {
+                        break;
+                    }
+
                     await this.safe(() => this.checkComments(post, watch));
                 }
             }
+
             return true;
         } catch (error) {
-            for (const record of state.records.values()) record.missing = 0;
+            for (const record of state.records.values()) {
+                record.missing = 0;
+            }
+
             throw error;
         } finally {
             watch.loading.delete(type);
@@ -831,38 +1041,58 @@ export class SoopClient {
 
     async checkMissing(state, watch, cookie, events) {
         for (const id of [...state.pending].slice(0, 10)) {
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) return;
+            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+                return;
+            }
+
             const record = state.records.get(id);
             state.pending.delete(id);
-            if (!record || record.removed) continue;
+
+            if (!record || record.removed) {
+                continue;
+            }
+
             let result;
+
             try {
-                result = await http.getContent(watch.bjId, id, { cookie: this.cookie });
+                result = await http.getContent(watch.bjId, id, {
+                    ...this.network.httpOptions,
+                    cookie: this.cookie
+                });
             } catch (error) {
                 record.missing = 0;
                 state.pending.add(id);
                 this.emit('error', error);
                 continue;
             }
+
             if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
                 record.missing = 0;
                 state.pending.add(id);
+
                 return;
             }
+
             const { status, data } = result;
+
             if (status === 515 && Number(data?.code) === 1380) {
                 record.missing++;
+
                 if (record.missing < 2) {
                     state.pending.add(id);
                     continue;
                 }
+
                 record.removed = true;
                 state.comments.delete(id);
                 events.push({ event: 'remove', data: record.data });
                 continue;
             }
+
             record.missing = 0;
+
             const auth = Number(data?.auth_no);
+
             if (status === 200 && String(data?.title_no) === id
                 && [101, 102].includes(auth)) {
                 if (record.auth !== auth && (record.auth !== null || auth === 102)) {
@@ -870,6 +1100,7 @@ export class SoopClient {
                         ...record.data, public: auth === 101
                     }});
                 }
+
                 record.auth = auth;
             } else {
                 state.pending.add(id);
@@ -878,19 +1109,25 @@ export class SoopClient {
     }
 
     startContent() {
-        if (!this.bjId) return Promise.resolve(false);
+        if (!this.bjId) {
+            return Promise.resolve(false);
+        }
+
         if (this.contentWatch?.bjId === this.bjId) {
             return this.contentWatch.ready;
         }
+
         this.stopContent();
 
         const types = ['post', 'clip', 'catch'];
+
         if (!this.contentStates.has(this.bjId)) {
             this.contentStates.set(this.bjId, new Map(types.map(type => [type, {
                 ready: false, since: 0, items: new Map(), comments: new Map(),
                 records: new Map(), current: new Set(), pending: new Set()
             }])));
         }
+
         const watch = {
             bjId: this.bjId,
             states: this.contentStates.get(this.bjId),
@@ -899,18 +1136,24 @@ export class SoopClient {
             ready: null
         };
         this.contentWatch = watch;
+
         const check = () => Promise.all(types.map(type =>
             this.safe(() => this.checkContent(type))
         ));
         watch.ready = check();
         watch.timer = setInterval(check, 120000);
+
         return watch.ready;
     }
 
     stopContent() {
-        if (!this.contentWatch) return false;
+        if (!this.contentWatch) {
+            return false;
+        }
+
         clearInterval(this.contentWatch.timer);
         this.contentWatch = null;
+
         return true;
     }
 
@@ -923,73 +1166,122 @@ export class SoopClient {
     }
 
     async sendCommentList(titleNo, bjId = this.bjId) {
-        const options = { cookie: this.cookie };
+        const options = {
+            ...this.network.httpOptions,
+            cookie: this.cookie
+        };
         const parents = new Map();
         let total = null;
         let lastPage = 1;
 
         for (let page = 1; page <= lastPage; page++) {
             const result = await http.getComments(bjId, titleNo, page, options);
-            if (!Array.isArray(result?.data) || !result.meta) return null;
+
+            if (!Array.isArray(result?.data) || !result.meta) {
+                return null;
+            }
+
             const meta = result.meta;
+
             if (!Number.isInteger(meta.total) || meta.total < 0
                 || !Number.isInteger(meta.last_page) || meta.last_page < 1
                 || meta.last_page > 20 || Number(meta.current_page) !== page
-                || (result.hidden_list?.length ?? 0) > 0) return null;
+                || (result.hidden_list?.length ?? 0) > 0) {
+                return null;
+            }
+
             if (total !== null && (total !== meta.total || lastPage !== meta.last_page)) {
                 return null;
             }
+
             total = meta.total;
             lastPage = meta.last_page;
+
             for (const item of result.data) {
-                if (!item.p_comment_no) return null;
+                if (!item.p_comment_no) {
+                    return null;
+                }
+
                 parents.set(String(item.p_comment_no), item);
             }
         }
-        if (parents.size !== total) return null;
+
+        if (parents.size !== total) {
+            return null;
+        }
 
         const comments = [];
+
         for (const item of parents.values()) {
             comments.push({ ...item, commentNo: item.p_comment_no, parentCommentNo: null });
+
             const count = Number(item.c_comment_cnt);
-            if (!Number.isInteger(count) || count < 0) return null;
-            if (!count) continue;
+
+            if (!Number.isInteger(count) || count < 0) {
+                return null;
+            }
+
+            if (!count) {
+                continue;
+            }
+
             const replies = await http.getReplies(bjId, titleNo, item.p_comment_no, options);
+
             if (!Array.isArray(replies?.data) || replies.data.length !== count
-                || (replies.reply_hidden_list?.length ?? 0) > 0) return null;
+                || (replies.reply_hidden_list?.length ?? 0) > 0) {
+                return null;
+            }
+
             const ids = new Set();
+
             for (const reply of replies.data) {
-                if (!reply.c_comment_no || ids.has(String(reply.c_comment_no))) return null;
+                if (!reply.c_comment_no || ids.has(String(reply.c_comment_no))) {
+                    return null;
+                }
+
                 ids.add(String(reply.c_comment_no));
                 comments.push({ ...reply, commentNo: reply.c_comment_no,
                     parentCommentNo: item.p_comment_no });
             }
         }
+
         return comments;
     }
 
     async checkComments(post, watch = this.contentWatch) {
-        if (!post?.titleNo || !watch || this.contentWatch !== watch) return false;
+        if (!post?.titleNo || !watch || this.contentWatch !== watch) {
+            return false;
+        }
+
         const states = watch.states.get('post').comments;
         const id = String(post.titleNo);
         const previous = states.get(id);
         const cookie = http.cookieString(this.cookie);
         const auth = crypto.createHash('sha256').update(cookie).digest('hex');
         let list;
+
         try {
             list = await this.sendCommentList(post.titleNo, watch.bjId);
         } catch (error) {
             previous?.missing.clear();
+
             throw error;
         }
-        if (!Array.isArray(list)) previous?.missing.clear();
+
+        if (!Array.isArray(list)) {
+            previous?.missing.clear();
+        }
+
         if (!Array.isArray(list) || this.contentWatch !== watch
-            || cookie !== http.cookieString(this.cookie)) return false;
+            || cookie !== http.cookieString(this.cookie)) {
+            return false;
+        }
 
         const baseline = !previous || previous.auth !== auth;
         const state = baseline ? { auth, items: new Map(), missing: new Map() } : previous;
         const current = new Map();
         const events = [];
+
         for (const item of list) {
             const key = `${item.parentCommentNo ?? 0}:${item.commentNo}`;
             const data = {
@@ -1004,15 +1296,26 @@ export class SoopClient {
             const old = state.items.get(key);
             current.set(key, { signature, data });
             state.missing.delete(key);
-            if (baseline) continue;
-            if (!old) events.push({ event: 'comment', data });
+
+            if (baseline) {
+                continue;
+            }
+
+            if (!old) {
+                events.push({ event: 'comment', data });
+            }
             else if (old.signature !== signature) {
                 events.push({ event: 'update', data: { ...data, before: old.data } });
             }
         }
+
         for (const [key, old] of state.items) {
-            if (current.has(key)) continue;
+            if (current.has(key)) {
+                continue;
+            }
+
             const count = (state.missing.get(key) ?? 0) + 1;
+
             if (count < 2) {
                 state.missing.set(key, count);
                 current.set(key, old);
@@ -1021,12 +1324,18 @@ export class SoopClient {
                 events.push({ event: 'delete', data: old.data });
             }
         }
+
         state.items = current;
         states.set(id, state);
+
         for (const { event, data } of events) {
-            if (this.contentWatch !== watch) break;
+            if (this.contentWatch !== watch) {
+                break;
+            }
+
             this.emit(event, data);
         }
+
         return true;
     }
 
@@ -1042,12 +1351,16 @@ export class SoopClient {
             let settled = false;
 
             const finish = result => {
-                if (settled) return;
+                if (settled) {
+                    return;
+                }
+
                 settled = true;
                 clearTimeout(timeout);
 
                 this.off('error', onError);
                 this.off('open', onOpen);
+                this.signal?.removeEventListener('abort', onAbort);
 
                 if (!result && this.bridge === bridge) {
                     this.closeBridge();
@@ -1058,6 +1371,7 @@ export class SoopClient {
 
             const onError = () => finish(false);
             const onOpen = () => finish(true);
+            const onAbort = () => finish(false);
             const timeout = setTimeout(() => {
                 try {
                     this.emit('error', new Error(
@@ -1070,6 +1384,7 @@ export class SoopClient {
 
             this.on('error', onError);
             this.on('open', onOpen);
+            this.signal?.addEventListener('abort', onAbort, { once: true });
 
             bridge.connect().catch(error => {
                 try {
@@ -1093,7 +1408,9 @@ export class SoopClient {
     }
 
     setBroadcast() {
-        if (!this.channel) return null;
+        if (!this.channel) {
+            return null;
+        }
 
         const category = (
             this.category.get(
@@ -1226,7 +1543,9 @@ export class SoopClient {
     }
 
     decode(text = '') {
-        if (!text) return '';
+        if (!text) {
+            return '';
+        }
 
         try {
             return decodeURIComponent(text);
@@ -1238,7 +1557,9 @@ export class SoopClient {
     parseTag(text = '', name = '') {
         const value = this.decode(text);
 
-        if (!value) return [];
+        if (!value) {
+            return [];
+        }
 
         return value.split(',')
             .map(v => v.trim())
@@ -1280,6 +1601,7 @@ export class SoopClient {
 
     async loadAssets() {
         const options = {
+            ...this.network.httpOptions,
             cookie: this.cookie
         };
 
@@ -1432,7 +1754,10 @@ export class SoopClient {
         const result = (
             await http.getStation(
             this.bjId,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result?.station;
@@ -1442,7 +1767,10 @@ export class SoopClient {
         const result = (
             await http.postLiveInfo(
             this.bjId,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result;
@@ -1450,12 +1778,17 @@ export class SoopClient {
 
     async sendStream(quality = 'hd') {
         return http.getStream(this.bjId, quality, {
+            ...this.network.httpOptions,
             cookie: this.cookie,
             password: this.broadPw,
         });
     }
 
     async startPackage(quality = 'original') {
+        if (this.idle) {
+            return false;
+        }
+
         if (this.package) {
             return this.package.change(quality);
         }
@@ -1467,7 +1800,10 @@ export class SoopClient {
         media.on('media', data => this.emit('media', data));
         media.on('error', error => this.emit('packageError', error));
         media.on('close', data => {
-            if (this.package === media) this.package = null;
+            if (this.package === media) {
+                this.package = null;
+            }
+
             this.emit('packageClose', data);
         });
 
@@ -1475,14 +1811,20 @@ export class SoopClient {
             return await media.connect();
         } catch (error) {
             media.fail(error);
+
             throw error;
         }
     }
 
     stopPackage() {
         const media = this.package;
-        if (!media) return false;
+
+        if (!media) {
+            return false;
+        }
+
         this.package = null;
+
         return media.close();
     }
 
@@ -1491,7 +1833,10 @@ export class SoopClient {
             await http.getSection(
             this.bjId,
             'broad',
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result;
@@ -1502,15 +1847,24 @@ export class SoopClient {
             await http.getBoard(
             bjId,
             { perPage: 20 },
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
-        if (!Array.isArray(result?.data)) return null;
+        if (!Array.isArray(result?.data)) {
+            return null;
+        }
+
         const posts = new Map();
         const notices = Array.isArray(result.notice_data) ? result.notice_data : [];
 
         for (const item of [...result.data, ...notices]) {
-            if (!item?.title_no || item.ucc) continue;
+            if (!item?.title_no || item.ucc) {
+                continue;
+            }
+
             posts.set(String(item.title_no), item);
         }
 
@@ -1528,15 +1882,19 @@ export class SoopClient {
 
     async sendClipList(bjId = this.bjId) {
         const result = await http.getVod(bjId, 'clip', {
+            ...this.network.httpOptions,
             cookie: this.cookie
         });
+
         return result?.contents;
     }
 
     async sendCatchList(bjId = this.bjId) {
         const result = await http.getVod(bjId, 'catch', {
+            ...this.network.httpOptions,
             cookie: this.cookie
         });
+
         return result?.contents;
     }
 
@@ -1551,6 +1909,10 @@ export class SoopClient {
     }
 
     async sendIceMode(type = 'ice_on', auth = 100001) { 
+        if (this.idle) {
+            return false;
+        }
+
         if (!this.channel?.BNO) {
             return false;
         }
@@ -1561,7 +1923,10 @@ export class SoopClient {
             this.userId,
             type,
             auth,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result;
@@ -1577,21 +1942,43 @@ export class SoopClient {
     } = {}) {
         let mask = 0;
 
-        if (streamer) mask |= ICE_AUTH.STREAMER;
-        if (fanClub) mask |= ICE_AUTH.FAN_CLUB;
-        if (supporter) mask |= ICE_AUTH.SUPPORTER;
-        if (topFan) mask |= ICE_AUTH.TOP_FAN;
-        if (subscriber) mask |= ICE_AUTH.SUBSCRIBER;
-        if (manager) mask |= ICE_AUTH.MANAGER;
+        if (streamer) {
+            mask |= ICE_AUTH.STREAMER;
+        }
+
+        if (fanClub) {
+            mask |= ICE_AUTH.FAN_CLUB;
+        }
+
+        if (supporter) {
+            mask |= ICE_AUTH.SUPPORTER;
+        }
+
+        if (topFan) {
+            mask |= ICE_AUTH.TOP_FAN;
+        }
+
+        if (subscriber) {
+            mask |= ICE_AUTH.SUBSCRIBER;
+        }
+
+        if (manager) {
+            mask |= ICE_AUTH.MANAGER;
+        }
 
         return mask;
     }
 
     async sendIceOption(count = 0, date = 1) {
+        if (this.idle) {
+            return false;
+        }
+
         const result = await http.postIceOption(
             count,
             date,
             {
+                ...this.network.httpOptions,
                 cookie: this.cookie
             }
         );
@@ -1600,6 +1987,10 @@ export class SoopClient {
     }
 
     async sendPoll(index) { 
+        if (this.idle) {
+            return false;
+        }
+
         if (!this.channel?.BNO) {
             return false;
         }
@@ -1609,7 +2000,10 @@ export class SoopClient {
             this.poll.bjId,
             this.poll.surveyNo,
             index,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result;
@@ -1620,13 +2014,20 @@ export class SoopClient {
             await http.getPoll(
             this.bjId,
             surveyNo,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result;
     }
 
     async sendOgq(message, ogqId, index = 1) {
+        if (this.idle) {
+            return false;
+        }
+
         const result = (
             await http.postOgqChat(
             this.channel,
@@ -1634,7 +2035,10 @@ export class SoopClient {
             message,
             ogqId,
             index,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return result;
@@ -1644,7 +2048,10 @@ export class SoopClient {
         const result = (
             await http.postChallenge(
             this.bjId,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return this.formatChallenge(
@@ -1713,7 +2120,10 @@ export class SoopClient {
         const result = (
             await http.postMission(
             this.bjId,
-            { cookie: this.cookie }
+            {
+                ...this.network.httpOptions,
+                cookie: this.cookie
+            }
         ));
 
         return this.formatMission(
@@ -1738,6 +2148,7 @@ export class SoopClient {
 
         const members = team.member.map(user => {
             const leader = user.team_leader ? '👑 ' : '';
+
             return `${leader}${user.bj_nick}(${user.bj_id})`;
         }).join(', ');
 
@@ -1755,7 +2166,9 @@ export class SoopClient {
     }
 
     findAssets(data = {}) {
-        if (!data) return null;
+        if (!data) {
+            return null;
+        }
         
         const emoticons = this.findEmoticon(
             data.message
@@ -1975,7 +2388,9 @@ export class SoopClient {
             
         const section = data?.[type];
 
-        if (!section) continue;
+        if (!section) {
+            continue;
+        }
 
         for (const group of section.groups || []) {
         for (const emoticon of group.emoticons || []) {

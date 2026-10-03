@@ -28,7 +28,9 @@ function isBase64(str) {
 }
 
 export function encode(str) {
-    if (!str) return null;
+    if (!str) {
+        return null;
+    }
 
     try {
         return Buffer
@@ -40,7 +42,9 @@ export function encode(str) {
 }
 
 export function decode(str) {
-    if (!str) return null;
+    if (!str) {
+        return null;
+    }
 
     if (!isBase64(str)) {
         return str;

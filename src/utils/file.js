@@ -24,6 +24,7 @@ export function join(...args) {
 
 export function find(name) {
     const file = get(name);
+
     return fs.existsSync(file) ? file : null;
 }
 
@@ -61,6 +62,7 @@ export function write(name, ...args) {
     }
 
     const data = `${args.join(' ')}\n`;
+
     return fs.writeFileSync(file, data);
 }
 
@@ -75,5 +77,6 @@ export function append(name, ...args) {
     }
 
     const data = `${args.join(' ')}\n`;
+
     return fs.appendFileSync(file, data);
 }

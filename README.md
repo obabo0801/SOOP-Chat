@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-green">
   <img src="https://img.shields.io/badge/node.js-24.16.0-brightgreen">
-  <img src="https://img.shields.io/badge/version-v1.0.4-blue">
+  <img src="https://img.shields.io/badge/version-v1.0.5-blue">
   <img src="https://img.shields.io/badge/status-experimental-orange">
 </p>
 
@@ -32,7 +32,13 @@ git@github.com:obabo0801/SOOP-Chat.git
 <details>
 <summary>❗ 업데이트 내역</summary>
 
-❗ 버전 1.0.4
+## ❗ 버전 1.0.5
+- 멀티 연결 기능 추가
+- 번호별 로그인 설정 지원
+- 접속 유지 모드 추가
+- 개별 프록시 설정 지원
+
+## ❗ 버전 1.0.4
 - Weflab 룰렛 확률 조회 기능 추가
   - /룰렛 개수 명령어 지원
 
@@ -143,11 +149,32 @@ npm install
 npm start
 ```
 
-또는
+배치 파일 실행
 
 ```bash
 start.bat
 ```
+
+멀티 접속
+
+```bash
+npm run start:multi -- 3
+```
+
+`tenants.json`에서 번호별  
+접속 정보를 설정합니다.  
+첫 실행 시 연결 개수에 맞춰  
+`tenants.json`을 생성합니다.  
+미설정 번호는 `.env`의 `BJID`로  
+비로그인 접속합니다.  
+
+멀티 종료
+
+```bash
+npm run stop:multi
+```
+
+실행 창에서 `Ctrl+C`로 종료합니다.
 
 ---
 
@@ -165,7 +192,15 @@ BROADPW="WHO_BROADPW"
 USERID="YOUR_ID"
 PASSWORD="YOUR_PASSWORD"
 SECONDPW="YOUR_SECONDPW"
+
+IDLE="true"
+# PROXY="http://host:port"
+# TENANTS_FILE="tenants.json"
 ```
+
+- `IDLE`: 접속 유지 모드
+- `PROXY`: 프록시 주소
+- `TENANTS_FILE`: 연결 설정 파일
 
 ### 브라우저 로그인
 
@@ -173,7 +208,11 @@ SECONDPW="YOUR_SECONDPW"
 
 ```env
 BROWSER="true"
+BROWSER_TYPE="chromium"
+# USER_AGENT="브라우저 식별값"
 ```
+
+`BROWSER_TYPE` 기본값: `chromium`
 
 최초 사용 시 Chromium을 설치합니다.
 
@@ -219,6 +258,8 @@ npx playwright install chromium
 | `/자막 번호` | 자막 언어 변경 |
 | `/모드 번호` | 채팅 로그 표시 범위 |
 | `/도움` | 명령어 목록 출력 |
+| `/목록` | 연결 상태 확인 |
+| `/종료` | 연결 종료 |
 
 ---
 

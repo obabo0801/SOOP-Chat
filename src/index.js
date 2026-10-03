@@ -2,6 +2,7 @@ import { config } from 'dotenv';
 import readline from 'readline';
 import { SoopClient } from '#soop/client';
 import * as http from '#soop/http';
+import * as control from '#soop/control';
 import * as log from '#utils/log';
 import * as weflab from '#utils/weflab';
 import { parseEnv } from '#utils/env';
@@ -15,6 +16,7 @@ const rl = readline.createInterface({
 );
 
 let client, isLink, isList, mode;
+let stopTask;
 
 (async () => {
     loadConfig();
@@ -59,7 +61,10 @@ let client, isLink, isList, mode;
 
     client = new SoopClient({
         bjId, broadPw, auto,
-        pver, subtitle, cookie
+        pver, subtitle, cookie,
+        idle: process.env.IDLE?.toLowerCase() === 'true',
+        userAgent: process.env.USER_AGENT || undefined,
+        proxy: process.env.PROXY || undefined
     });
 
     const browser = (
@@ -71,6 +76,7 @@ let client, isLink, isList, mode;
     client.on('live', data => {
         if (data.result === -1 && data.message) {
             log.warn('[알림]', `\x1b[1m${data.message}\x1b[0m`);
+
             return;
         }
 
@@ -134,7 +140,11 @@ let client, isLink, isList, mode;
             const label = { post: '게시글', clip: '클립', catch: '캐치' }[data.type];
             const action = event === 'remove' ? '삭제'
                 : data.public ? '공개 전환' : '비공개 전환';
-            if (isLink && data.url) log.load(`[${label}]`, data.url);
+
+            if (isLink && data.url) {
+                log.load(`[${label}]`, data.url);
+            }
+
             log.info(`[${label} ${action}]`, data.title);
         });
     }
@@ -148,7 +158,11 @@ let client, isLink, isList, mode;
     for (const [event, action] of Object.entries(comments )) {
         client.on(event, data => {
             const label = data.parentCommentNo ? '답글' : '댓글';
-            if (isLink && data.url) log.load(`[${label}]`, data.url);
+
+            if (isLink && data.url) {
+                log.load(`[${label}]`, data.url);
+            }
+
             log.info(`[${label} ${action}]`,
                 `${data.userNick}(${data.userId}) | 게시글: ${data.title} | ${data.message}`
             );
@@ -281,6 +295,7 @@ let client, isLink, isList, mode;
             message = `${data.user.name}(${data.user.id})님이 대화방에 참여했습니다.`;
 
             log.debug('[입장]', `[${data.user.role}]`, message);
+
             return;
         }
 
@@ -288,6 +303,7 @@ let client, isLink, isList, mode;
             message = `${data.user.name}(${data.user.id})님이 대화방에서 나가셨습니다.`;
 
             log.debug('[퇴장]', `[${data.user.role}]`, message);
+
             return;
         }
 
@@ -295,6 +311,7 @@ let client, isLink, isList, mode;
             message = `${data.user.name}(${data.user.id})님이 블라인드 상태에서 탈출을 시도하여 강제퇴장 되었습니다.`;
 
             log.error('[퇴장]', `[${data.user.role}]`, `\x1b[1m${message}\x1b[0m`);
+
             return;
         }
 
@@ -423,6 +440,7 @@ let client, isLink, isList, mode;
     client.on('iceMode', data => {
         if (data.index === 0) {
             log.cmd('[얼음]', '\x1b[1m채팅을 녹였습니다. 채팅에 참여 하실 수 있습니다.\x1b[0m');
+
             return;
         }
 
@@ -490,6 +508,7 @@ let client, isLink, isList, mode;
     client.on('quickview', data => {
         if (!data.item) {
             log.warn('[퀵뷰 선물]', '알 수 없는 퀵뷰 타입입니다.');
+
             return;
         }
 
@@ -509,11 +528,13 @@ let client, isLink, isList, mode;
             );
         } catch (error) {
             log.error('[투표]', error);
+
             return;
         }
 
         if (!poll) {
             log.warn('[투표]', '투표 정보를 가져오지 못했습니다.');
+
             return;
         }
 
@@ -545,6 +566,7 @@ let client, isLink, isList, mode;
 
         if (poll.result !== 1) {
             log.info(poll.message);
+
             return;
         }
 
@@ -582,6 +604,7 @@ let client, isLink, isList, mode;
     client.on('kickList', data => {
         if (data.length === 0) {
             log.info('[알림]', '강제퇴장 인원이 없습니다.');
+
             return;
         }
 
@@ -650,7 +673,9 @@ let client, isLink, isList, mode;
     client.on('translation', data => {
         log.info('[번역]', `\x1b[1m${data.message} (${data.before.label} → ${data.after.label})\x1b[0m`);
         
-        if (data.mode === 2) rl.write(data.message);
+        if (data.mode === 2) {
+            rl.write(data.message);
+        }
     });
 
     // notice
@@ -664,6 +689,7 @@ let client, isLink, isList, mode;
     client.on('subscription', data => {
         if (!data.item) {
             log.warn('[구독권 선물]', '알 수 없는 구독권 타입입니다.');
+
             return;
         }
 
@@ -762,6 +788,7 @@ let client, isLink, isList, mode;
     // adInBroad
     client.on('adInBroad', data => {
         let message = '';
+
         if (data.ad_in_room === 1) {
             message = '쉬는시간이 설정되었습니다. 쉬는시간에도 채팅입력이 가능합니다.';
         } else {
@@ -940,11 +967,13 @@ let client, isLink, isList, mode;
             mission = await client.sendMissionList();
         } catch (error) {
             log.error('[대결미션]', error);
+
             return;
         }
 
         if (!mission.ok) {
             log.warn('[대결미션]', mission.message);
+
             return;
         }
 
@@ -1010,6 +1039,7 @@ let client, isLink, isList, mode;
     client.on('session', data => {
         if (!data.login) {
             log.warn('[세션]', '방송 연령 제한이 설정되어 종료합니다.');
+
             return;
         }
 
@@ -1065,9 +1095,14 @@ let client, isLink, isList, mode;
                 '#soop/browser'
             );
 
-            const cookie = await getSoopCookie();
+            const cookie = await getSoopCookie({
+                browserType: process.env.BROWSER_TYPE || 'chromium',
+                proxy: client.network.proxy,
+                userAgent: process.env.USER_AGENT || undefined
+            });
 
             const info = await http.getPrivateInfo({
+                ...client.network.httpOptions,
                 cookie
             });
 
@@ -1107,22 +1142,46 @@ let client, isLink, isList, mode;
 });
 
 function shutdown() {
+    if (stopTask) {
+        return stopTask;
+    }
+
     pause();
     close();
-    client.disconnect();
-    process.exit(0);
+
+    stopTask = Promise.resolve().then(async () => {
+        let code = 0;
+
+        try {
+            await client?.connecting?.catch(() => {});
+            await client?.destroy();
+        } catch {
+            log.error('[종료]', '연결 종료 실패');
+            code = 1;
+        }
+
+        process.exit(code);
+    });
+
+    return stopTask;
 }
 
 function prompt() {
-    if (!rl.closed) rl.prompt();
+    if (!rl.closed) {
+        rl.prompt();
+    }
 }
 
 function pause() {
-    if (!rl.closed) rl.pause();
+    if (!rl.closed) {
+        rl.pause();
+    }
 }
 
 function close() {
-    if (!rl.closed) rl.close();
+    if (!rl.closed) {
+        rl.close();
+    }
 }
 
 function loadConfig() {
@@ -1141,8 +1200,14 @@ function getConfig(name) {
         const value = result.trim();
 
         if (['auto', 'isLink', 'isList'].includes(name)) {
-            if (value.toLowerCase() === 'true') return true;
-            if (value.toLowerCase() === 'false') return false;
+            if (value.toLowerCase() === 'true') {
+                return true;
+            }
+
+            if (value.toLowerCase() === 'false') {
+                return false;
+            }
+
             return null;
         }
 
@@ -1196,9 +1261,22 @@ async function command(cmd) {
 
     try {
         switch (name) {
+        case '/목록': {
+            const result = await control.requestMulti('status');
+
+            log.table(Object.fromEntries(
+                result.map(({ id, ...data }) => [
+                    id, data
+                ])
+            ));
+
+            break;
+        }
+
         case '/내정보':
         case '/myinfo': {
             const i = await http.getPrivateInfo({
+                ...client.network.httpOptions,
                 cookie: client.cookie
             });
 
@@ -1215,17 +1293,21 @@ async function command(cmd) {
                 break;
             }
 
-            const info = await http.getStation(targetId);
+            const info = await http.getStation(targetId, client.network.httpOptions);
 
             if (!info) {
                 log.warn('[조회]', `${targetId}은 검색 결과가 없습니다.`);
+
                 return false;
             }
 
             const result = await http.getSection(
                 targetId,
                 'broad',
-                { cookie: client.cookie }
+                {
+                    ...client.network.httpOptions,
+                    cookie: client.cookie
+                }
             );
 
             if (result) {
@@ -1233,6 +1315,7 @@ async function command(cmd) {
             } else {
                 log.info('[조회]', `${info?.station.user_nick}님은 현재 오프라인입니다.`);
             }
+
             break;
         }
 
@@ -1268,7 +1351,7 @@ async function command(cmd) {
                 break;
             }
 
-            const info = await http.getStation(targetId);
+            const info = await http.getStation(targetId, client.network.httpOptions);
 
             if (!info) {
                 log.warn('[연결]', `${targetId}은 검색 결과가 없습니다.`);
@@ -1357,6 +1440,7 @@ async function command(cmd) {
             if (re) {
                 await client.connectWs();
             }
+
             break
         }
 
@@ -1655,6 +1739,7 @@ async function command(cmd) {
         case '/참여인원':
         case '/userlist': {
             await client.sendUserList();
+
             if (!isList) {
                 const list = [...client.userList.values()]
                     .map((user, index) => {
@@ -1664,6 +1749,7 @@ async function command(cmd) {
 
                 log.info(`[참여인원]\n${list}`);
             }
+
             break;
         }
 
@@ -1779,7 +1865,8 @@ async function command(cmd) {
 
         case '/종료':
         case '/exit':
-            shutdown();
+            await shutdown();
+
             return;
         
         case '/도움':
@@ -1790,6 +1877,7 @@ async function command(cmd) {
                 '/연결 아이디 방송비밀번호',
                 '/비밀번호 방송비밀번호',
                 '/연결해제',
+                '/목록',
                 '/로그인 아이디 비밀번호 +2차비밀번호',
                 '/로그아웃',
 
@@ -1839,6 +1927,7 @@ rl.on('line', async (input) => {
 
     if (!cmd) {
         prompt();
+
         return;
     }
 

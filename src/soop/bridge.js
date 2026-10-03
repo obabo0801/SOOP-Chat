@@ -26,7 +26,10 @@ export class Bridge {
             return false;
         }
 
-        this.ws = new WebSocket(this.url, 'bridge');
+        this.ws = new WebSocket(
+            this.url, 'bridge',
+            this.client.network.socketOptions
+        );
         this.viewer = null;
 
         await this.open();
@@ -35,31 +38,45 @@ export class Bridge {
     }
 
     async open() {
+        const ws = this.ws;
+        const signal = this.client.signal;
+
         await new Promise((resolve, reject) => {
 
             const timeout = setTimeout(() => {
                 reject('bridge timeout');
             }, 10000);
 
-            this.ws.on('open', () => {
+            ws.on('open', () => {
                 clearTimeout(timeout);
+
+                if (this.ws !== ws || signal?.aborted) {
+                    reject(new Error('연결 취소'));
+
+                    return;
+                }
+
                 this.startPing();
                 this.send(this.makeInitGw());
                 resolve(true);
             });
 
-            this.ws.on('message', data => {
+            ws.on('message', data => {
+                if (this.ws !== ws || signal?.aborted) {
+                    return;
+                }
+
                 this.handler(
                     this.parse(data)
                 );
             });
 
-            this.ws.on('error', error => {
+            ws.on('error', error => {
                 clearTimeout(timeout);
                 reject(error);
             });
 
-            this.ws.on('close', (code, reason) => {
+            ws.on('close', (code, reason) => {
                 clearTimeout(timeout);
                 this.stopPing();
                 reject(new Error(
@@ -173,6 +190,7 @@ export class Bridge {
             if (packet.RESULT === 0) {
                 this.onViewer(DATA);
             }
+
             break;
 
         case 'GETBJADCON':
@@ -242,26 +260,34 @@ export class Bridge {
             value === null
             || value === undefined
             || String(value).trim() === ''
-        )) return;
+        )) {
+            return;
+        }
 
         const counts = values.map(Number);
 
         if (counts.some(count =>
             !Number.isSafeInteger(count) || count < 0
-        )) return;
+        )) {
+            return;
+        }
 
         const pc = counts[0] + counts[1];
         const mobile = counts[2] + counts[3];
         const broadNo = Number(data.uiBroadNo);
 
         if (!Number.isSafeInteger(broadNo)
-            || broadNo <= 0) return;
+            || broadNo <= 0) {
+            return;
+        }
 
         const prev = this.viewer;
 
         if (prev?.broadNo === broadNo
             && prev.pc === pc
-            && prev.mobile === mobile) return;
+            && prev.mobile === mobile) {
+            return;
+        }
 
         this.viewer = { broadNo, pc, mobile };
 
