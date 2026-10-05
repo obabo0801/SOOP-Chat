@@ -5,6 +5,7 @@
     "cookie": "",
 
     "weflab": "WEFLAB",
+    "editor": true,
 
     "isLink": true,
     "isList": false,

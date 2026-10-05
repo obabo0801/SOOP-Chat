@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>매크로</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/index.js"></script>
+  </head>
+  <body>
+    <header>
+      <div><strong id="broadcaster"></strong></div>
+      <div class="actions">
+        <label class="switch"><input id="enabled" type="checkbox" />매크로 사용</label>
+        <button id="save" class="primary" type="button" disabled>저장</button>
+      </div>
+    </header>
+    <p id="status" role="status"></p>
+    <main>
+      <aside>
+        <div class="heading">
+          <h1>매크로</h1>
+          <button id="add" type="button">추가</button>
+        </div>
+        <input id="search" type="search" placeholder="이름 검색" aria-label="이름 검색" />
+        <nav id="list" aria-label="매크로 목록"></nav>
+      </aside>
+      <section>
+        <p id="empty">매크로를 선택해주세요.</p>
+        <form id="form" hidden>
+          <div class="heading">
+            <h2 id="heading">설정</h2>
+            <div class="actions">
+              <label class="switch"
+                ><input id="active" type="checkbox" />이 규칙 사용</label
+              >
+              <span class="divider"></span>
+              <button id="up" type="button">위로</button
+              ><button id="down" type="button">아래로</button>
+              <button id="duplicate" type="button">복사</button
+              ><button id="remove" type="button">삭제</button>
+            </div>
+          </div>
+          <div class="columns">
+            <label>이름<input id="name" autocomplete="off" /></label>
+            <label
+              >종류<select id="kind">
+                <option value="command">명령어</option>
+                <option value="text">문구 감지</option>
+                <option value="regex">단어 감지</option>
+                <option value="event">이벤트</option>
+                <option value="interval">타이머</option>
+              </select></label
+            >
+          </div>
+          <div class="columns">
+            <div>
+              <label id="cooldown-field"
+                >대기 시간 (초)<input id="cooldown" type="number" min="0" step="any"
+              /></label>
+              <label id="interval-field"
+                >반복 시간 (초)<input id="interval" type="number" min="1" step="any"
+              /></label>
+            </div>
+            <label
+              >답변 위치<select id="output">
+                <option value="chat">전체 채팅</option>
+                <option value="manager">매니저 채팅</option>
+                <option value="direct">귓속말</option>
+              </select></label
+            >
+          </div>
+          <div class="columns">
+            <label id="access-field"
+              >사용 권한<select id="access">
+                <option value="all">전체</option>
+                <option value="manager">매니저 이상</option>
+                <option value="streamer">스트리머</option>
+              </select></label
+            >
+            <label id="flags-field">정규식<input id="flags" placeholder="i" /></label>
+          </div>
+          <div class="columns options">
+            <label id="edit-field" class="switch"
+              ><input id="edit" type="checkbox" />매니저 채팅으로 수정</label
+            >
+            <label id="commands-field" class="switch"
+              ><input id="commands" type="checkbox" />없는 명령어 숨기기</label
+            >
+          </div>
+          <label
+            >동작<select id="action">
+              <option value="reply">답변</option>
+              <option value="roulette">룰렛</option>
+              <option value="warn">경고</option>
+              <option value="mute">채금</option>
+              <option value="kick">강퇴</option>
+            </select></label
+          >
+          <label id="pattern-field"
+            ><span id="pattern-label">명령어</span>
+            <textarea id="pattern" rows="3" placeholder="!인사&#10;!안녕"></textarea>
+          </label>
+          <div id="events-field" hidden>
+            <label>이벤트 선택</label>
+            <div id="events" class="events"></div>
+          </div>
+          <label id="count-field" hidden
+            >채금 횟수<select id="count">
+              <option value="0">경고</option>
+              <option value="1">1회</option>
+              <option value="2">2회</option>
+              <option value="3">3회</option>
+            </select></label
+          >
+          <div class="actions assets">
+            <button id="emoticon" type="button">이모티콘</button>
+            <span id="divider"></span>
+            <div id="ogq-field">
+              <button id="ogq" type="button">OGQ</button>
+            </div>
+          </div>
+          <div id="emoticon-picker" hidden>
+            <input id="emoticon-search" type="search" placeholder="이모티콘 검색" />
+            <div id="emoticons" class="stickers"></div>
+          </div>
+          <div id="picker" hidden>
+            <div id="packs" class="stickers"></div>
+            <hr id="separator" hidden />
+            <div id="stickers" class="stickers"></div>
+          </div>
+          <label for="message">답변</label>
+          <button id="attachment" type="button" title="OGQ 해제" hidden>
+            <img id="ogq-image" />
+          </button>
+          <div
+            id="message"
+            contenteditable="true"
+            role="textbox"
+            aria-label="답변"
+            aria-multiline="true"
+          ></div>
+          <textarea id="reply" hidden></textarea>
+          <div id="roulette" hidden>
+            <label>룰렛 제목<input id="title" placeholder="[{개수} 룰렛]" /></label>
+            <div class="columns">
+              <label>기본 개수<input id="default" type="number" min="1" /></label>
+              <label
+                >룰렛 번호<textarea id="index" rows="2" placeholder="0"></textarea>
+              </label>
+            </div>
+            <label
+              >개수 범위<textarea
+                id="ranges"
+                rows="3"
+                placeholder="50~51&#10;500~510"
+              ></textarea>
+            </label>
+            <label
+              >관련 번호<textarea
+                id="numbers"
+                rows="3"
+                placeholder="50, 51, 500, 501"
+              ></textarea>
+            </label>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

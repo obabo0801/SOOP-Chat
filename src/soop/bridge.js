@@ -1,498 +1,489 @@
 import { WebSocket } from 'ws';
 
 export class Bridge {
-    constructor(client) {
-        this.client = client;
-        this.ws = null;
-        this.cert = null;
-        this.ping = null;
-        this.viewer = null;
+  constructor(client) {
+    this.client = client;
+    this.ws = null;
+    this.cert = null;
+    this.ping = null;
+    this.viewer = null;
+  }
+
+  get url() {
+    const result = `wss://bridge.sooplive.com/` + `Websocket/${this.client.bjId}`;
+
+    return result;
+  }
+
+  isOpen() {
+    const result = this.ws && this.ws.readyState === WebSocket.OPEN;
+
+    return result;
+  }
+
+  async connect() {
+    if (this.isOpen()) {
+      return false;
     }
 
-    get url() {
-        return (`wss://bridge.sooplive.com/`
-            + `Websocket/${this.client.bjId}`
-        );
-    }
+    this.ws = new WebSocket(this.url, 'bridge', this.client.network.socketOptions);
+    this.viewer = null;
 
-    isOpen() {
-        return (this.ws
-            && this.ws.readyState === WebSocket.OPEN
-        );
-    }
+    await this.open();
 
-    async connect() {
-        if (this.isOpen()) {
-            return false;
+    return true;
+  }
+
+  async open() {
+    const ws = this.ws;
+    const signal = this.client.cancellation ?? this.client.signal;
+
+    await new Promise((resolve, reject) => {
+      let settled = false;
+
+      const finish = error => {
+        if (settled) {
+          return;
         }
 
-        this.ws = new WebSocket(
-            this.url, 'bridge',
-            this.client.network.socketOptions
-        );
-        this.viewer = null;
+        settled = true;
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', aborted);
 
-        await this.open();
+        if (error) {
+          reject(error);
+        }
+        else {
+          resolve(true);
+        }
+      };
 
-        return true;
-    }
+      const timeout = setTimeout(() => {
+        finish(new Error('브릿지 연결 시간 초과'));
+      }, 10000);
+      const aborted = () => finish(new Error('연결 취소'));
 
-    async open() {
-        const ws = this.ws;
-        const signal = this.client.signal;
+      signal?.addEventListener('abort', aborted, { once: true });
 
-        await new Promise((resolve, reject) => {
-            let settled = false;
+      ws.on('open', () => {
+        if (this.ws !== ws || signal?.aborted) {
+          finish(new Error('연결 취소'));
 
-            const finish = error => {
-                if (settled) {
-                    return;
-                }
-
-                settled = true;
-                clearTimeout(timeout);
-                signal?.removeEventListener('abort', aborted);
-
-                if (error) {
-                    reject(error);
-                }
-                else {
-                    resolve(true);
-                }
-            };
-
-            const timeout = setTimeout(() => {
-                finish(new Error('브릿지 연결 시간 초과'));
-            }, 10000);
-            const aborted = () => finish(new Error('연결 취소'));
-
-            signal?.addEventListener('abort', aborted, { once: true });
-
-            ws.on('open', () => {
-                if (this.ws !== ws || signal?.aborted) {
-                    finish(new Error('연결 취소'));
-
-                    return;
-                }
-
-                this.startPing();
-                this.send(this.makeInitGw());
-                finish();
-            });
-
-            ws.on('message', data => {
-                if (this.ws !== ws || signal?.aborted) {
-                    return;
-                }
-
-                this.handler(
-                    this.parse(data)
-                );
-            });
-
-            ws.on('error', error => {
-                finish(error);
-            });
-
-            ws.on('close', () => {
-                if (this.ws === ws) {
-                    this.stopPing();
-                }
-
-                finish(new Error('브릿지 연결 종료'));
-            });
-
-            if (signal?.aborted) {
-                aborted();
-            }
-        });
-    }
-
-    close() {
-        this.stopPing();
-        this.viewer = null;
-
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
+          return;
         }
 
-        return true;
-    }
+        this.startPing();
+        this.send(this.makeInitGw());
+        finish();
+      });
 
-    parse(data) {
-        const text = data.toString();
-
-        try {
-            return JSON.parse(text);
-        } catch {
-            return {
-                SVC: 'UNKNOWN',
-                DATA: text
-            };
-        }
-    }
-
-    send(data) {
-        if (!this.isOpen()) {
-            return false;
+      ws.on('message', data => {
+        if (this.ws !== ws || signal?.aborted) {
+          return;
         }
 
-        this.ws.send(
-            typeof data === 'string'
-                ? data
-                : JSON.stringify(data)
-        );
+        this.handler(this.parse(data));
+      });
 
-        return true;
-    }
+      ws.on('error', error => {
+        finish(error);
+      });
 
-    startPing() {
-        this.stopPing();
-
-        this.ping = setInterval(() => {
-            this.send(this.makePing());
-        }, 20000);
-    }
-
-    stopPing() {
-        if (!this.ping) {
-            return false;
+      ws.on('close', () => {
+        if (this.ws === ws) {
+          this.stopPing();
         }
 
-        clearInterval(this.ping);
-        this.ping = null;
+        finish(new Error('브릿지 연결 종료'));
+      });
 
-        return true;
+      if (signal?.aborted) {
+        aborted();
+      }
+    });
+  }
+
+  close() {
+    this.stopPing();
+    this.viewer = null;
+
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
     }
 
-    handler(packet = {}) {
-        if (!packet || typeof packet !== 'object' || Array.isArray(packet)) {
-            return;
+    return true;
+  }
+
+  parse(data) {
+    const text = data.toString();
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      const result = {
+        SVC: 'UNKNOWN',
+        DATA: text
+      };
+
+      return result;
+    }
+  }
+
+  send(data) {
+    if (!this.isOpen()) {
+      return false;
+    }
+
+    this.ws.send(typeof data === 'string' ? data : JSON.stringify(data));
+
+    return true;
+  }
+
+  startPing() {
+    this.stopPing();
+
+    this.ping = setInterval(() => {
+      this.send(this.makePing());
+    }, 20000);
+  }
+
+  stopPing() {
+    if (!this.ping) {
+      return false;
+    }
+
+    clearInterval(this.ping);
+    this.ping = null;
+
+    return true;
+  }
+
+  handler(packet = {}) {
+    if (!packet || typeof packet !== 'object' || Array.isArray(packet)) {
+      return;
+    }
+
+    const { SVC, DATA } = packet;
+
+    switch (SVC) {
+      case 'FLASH_LOGIN':
+        break;
+
+      case 'CERTTICKETEX':
+        this.onCert(DATA);
+        break;
+
+      case 'JOINCH_COMMON':
+        this.onJoin(DATA);
+        break;
+
+      case 'CCP_SVC_JOINCH_COMMON':
+        this.onFail(DATA);
+        break;
+
+      case 'GETCHINFO':
+        break;
+
+      case 'GETCHINFOEX':
+        break;
+
+      case 'SETCHINFO':
+        break;
+
+      case 'SETCHINFOEX':
+        this.onSet(DATA);
+        break;
+
+      case 'CLOSECH':
+        this.onClose(DATA);
+        break;
+
+      case 'BCONT_STATE':
+        break;
+
+      case 'GETUSERCNT':
+        break;
+
+      case 'GETUSERCNTEX':
+        if (packet.RESULT === 0) {
+          this.onViewer(DATA);
         }
 
-        const { SVC, DATA } = packet;
+        break;
 
-        switch (SVC) {
-        case 'FLASH_LOGIN':
-            break;
+      case 'GETBJADCON':
+        break;
 
-        case 'CERTTICKETEX':
-            this.onCert(DATA);
-            break;
+      case 'GETITEM_SELL':
+        break;
 
-        case 'JOINCH_COMMON':
-            this.onJoin(DATA);
-            break;
+      case 'TRANSLATED_TITLES':
+        break;
 
-        case 'CCP_SVC_JOINCH_COMMON':
-            this.onFail(DATA);
-            break;
+      case 'WAITBJSESS':
+        break;
 
-        case 'GETCHINFO':
-            break;
+      default:
+        const json = JSON.stringify(packet, null, 2);
 
-        case 'GETCHINFOEX':
-            break;
+        this.client.emit('bridge', json);
+        break;
+    }
+  }
 
-        case 'SETCHINFO':
-            break;
+  onCert(data = {}) {
+    this.cert = {
+      append: data.pcAppendDat,
+      ticket: data.pcTicket,
+      len: Number(data.iTicketLen),
+      port: Number(data.iPort),
+      ip: Number(data.uiIpAddr),
+      broadNo: Number(data.uiBroadId)
+    };
 
-        case 'SETCHINFOEX':
-            this.onSet(DATA);
-            break;
+    this.send(this.makeInitBroad());
+  }
 
-        case 'CLOSECH':
-            this.onClose(DATA);
-            break;
+  onJoin(data = {}) {
+    const info = {
+      broad: this.client.broadcast,
+      bjId: this.client.bjId,
+      bjNick: this.client.bjNick
+    };
 
-        case 'BCONT_STATE':
-            break;
+    this.client.emit('open', info);
+  }
 
-        case 'GETUSERCNT':
-            break;
+  onFail(data = {}) {
+    const text = data?.acErrMesg;
 
-        case 'GETUSERCNTEX':
-            if (packet.RESULT === 0) {
-                this.onViewer(DATA);
-            }
+    this.client.emit('error', text);
+    this.client.broadPw = null;
+    this.client.disconnect(false);
+  }
 
-            break;
+  onSet(data = {}) {
+    this.client.updateBroadcast(data);
+  }
 
-        case 'GETBJADCON':
-            break;
+  onViewer(data = {}) {
+    const values = [
+      data?.uiMainChPCUser,
+      data?.uiSubChPCUser,
+      data?.uiMainChMBUser,
+      data?.uiSubChMBUser
+    ];
 
-        case 'GETITEM_SELL':
-            break;
-
-        case 'TRANSLATED_TITLES':
-            break;
-
-        case 'WAITBJSESS':
-            break;
-
-        default:
-            const json = JSON.stringify(packet, null, 2);
-            this.client.emit('bridge', json);
-            break;
-        }
+    if (
+      values.some(
+        value => value === null || value === undefined || String(value).trim() === ''
+      )
+    ) {
+      return;
     }
 
-    onCert(data = {}) {
-        this.cert = {
-            append: data.pcAppendDat,
-            ticket: data.pcTicket,
-            len: Number(data.iTicketLen),
-            port: Number(data.iPort),
-            ip: Number(data.uiIpAddr),
-            broadNo: Number(data.uiBroadId),
-        };
+    const counts = values.map(Number);
 
-        this.send(
-            this.makeInitBroad()
-        );
+    if (counts.some(count => !Number.isSafeInteger(count) || count < 0)) {
+      return;
     }
 
-    onJoin(data = {}) {
-        const info = {
-            broad: this.client.broadcast,
-            bjId: this.client.bjId,
-            bjNick: this.client.bjNick,
-        };
+    const pc = counts[0] + counts[1];
+    const mobile = counts[2] + counts[3];
+    const broadNo = Number(data.uiBroadNo);
 
-        this.client.emit('open', info);
+    if (!Number.isSafeInteger(broadNo) || broadNo <= 0) {
+      return;
     }
 
-    onFail(data = {}) {
-        const text = data?.acErrMesg;
-        this.client.emit('error', text);
-        this.client.broadPw = null;
-        this.client.disconnect(false);
+    const prev = this.viewer;
+
+    if (prev?.broadNo === broadNo && prev.pc === pc && prev.mobile === mobile) {
+      return;
     }
 
-    onSet(data = {}) {
-        this.client.updateBroadcast(data);
+    this.viewer = { broadNo, pc, mobile };
+
+    this.client.emit('viewer', {
+      bjId: this.client.bjId,
+      broadNo,
+      total: pc + mobile,
+      pc,
+      mobile
+    });
+  }
+
+  onClose(data = {}) {
+    if (data.pcEndingMsg) {
+      this.client.endingMsg(data.pcEndingMsg);
     }
+  }
 
-    onViewer(data = {}) {
-        const values = [
-            data?.uiMainChPCUser,
-            data?.uiSubChPCUser,
-            data?.uiMainChMBUser,
-            data?.uiSubChMBUser,
-        ];
+  makeInitGw() {
+    const c = this.client.channel;
 
-        if (values.some(value =>
-            value === null
-            || value === undefined
-            || String(value).trim() === ''
-        )) {
-            return;
-        }
+    const result = {
+      SVC: 'INIT_GW',
+      RESULT: 0,
+      DATA: {
+        gate_ip: c.GWIP,
+        gate_port: Number(c.GWPT),
+        broadno: Number(c.BNO),
+        category: c.CATE,
+        QUALITY: 'normal',
+        cli_type: 41,
+        cc_cli_type: 19,
+        cookie: c.TK || '',
+        fanticket: c.FTK,
+        guid: this.client.guid,
+        update_info: 0,
+        BJID: c.BJID,
+        JOINLOG: this.makeJoinLog(),
+        addinfo: this.makeAddInfo()
+      }
+    };
 
-        const counts = values.map(Number);
+    return result;
+  }
 
-        if (counts.some(count =>
-            !Number.isSafeInteger(count) || count < 0
-        )) {
-            return;
-        }
+  makeInitBroad() {
+    const c = this.client.channel;
+    const cert = this.cert;
 
-        const pc = counts[0] + counts[1];
-        const mobile = counts[2] + counts[3];
-        const broadNo = Number(data.uiBroadNo);
+    const result = {
+      SVC: 'INIT_BROAD',
+      RESULT: 0,
+      DATA: {
+        center_ip: c.CTIP,
+        center_port: Number(c.CTPT),
+        passwd: this.client.broadPw || '',
+        QUALITY: 'normal',
+        cli_type: 41,
+        cc_cli_type: 19,
+        guid: this.client.guid,
+        append_data: cert.append,
+        gw_ticket: cert.ticket,
+        JOINLOG: this.makePlayLog()
+      }
+    };
 
-        if (!Number.isSafeInteger(broadNo)
-            || broadNo <= 0) {
-            return;
-        }
+    return result;
+  }
 
-        const prev = this.viewer;
+  makePing() {
+    const result = {
+      SVC: 'KEEPALIVE',
+      RESULT: 0,
+      DATA: {}
+    };
 
-        if (prev?.broadNo === broadNo
-            && prev.pc === pc
-            && prev.mobile === mobile) {
-            return;
-        }
+    return result;
+  }
 
-        this.viewer = { broadNo, pc, mobile };
+  makeAddInfo() {
+    const DC1 = '\x11';
+    const DC2 = '\x12';
 
-        this.client.emit('viewer', {
-            bjId: this.client.bjId,
-            broadNo,
-            total: pc + mobile,
-            pc,
-            mobile,
-        });
-    }
+    const result = `ad_lang${DC1}ko${DC2}` + `is_auto${DC1}0${DC2}`;
 
-    onClose(data = {}) {
-        if (data.pcEndingMsg) {
-            this.client.endingMsg(
-                data.pcEndingMsg
-            );
-        }
-    }
+    return result;
+  }
 
-    makeInitGw() {
-        const c = this.client.channel;
+  makeJoinLog() {
+    const c = this.client.channel;
 
-        return {
-            SVC: 'INIT_GW',
-            RESULT: 0,
-            DATA: {
-                gate_ip: c.GWIP,
-                gate_port: Number(c.GWPT),
-                broadno: Number(c.BNO),
-                category: c.CATE,
-                QUALITY: 'normal',
-                cli_type: 41,
-                cc_cli_type: 19,
-                cookie: c.TK || '',
-                fanticket: c.FTK,
-                guid: this.client.guid,
-                update_info: 0,
-                BJID: c.BJID,
-                JOINLOG: this.makeJoinLog(),
-                addinfo: this.makeAddInfo(),
-            }
-        };
-    }
+    const result = this.makeLog({
+      log: {
+        uuid: this.client.uuid,
+        geo_cc: c.geo_cc,
+        geo_rc: c.geo_rc,
+        acpt_lang: c.acpt_lang,
+        svc_lang: c.svc_lang,
+        is_iframeapi: false,
+        content_lang: c.STRM_LANG_TYPE,
+        os: 'win',
+        is_streamer: false,
+        is_rejoin: false,
+        is_auto: false,
+        is_support_adaptive: true,
+        uuid_3rd: this.client.uuid,
+        subscribe: -1,
+        player_mode: 'landing',
+        sub_view_type: 'non_sub',
+        subscription_type: 'basic'
+      },
+      liveualog: {
+        is_clearmode: true,
+        lowlatency: c.LOWLAYTENCYBJ,
+        is_streamer: false,
+        os: 'win'
+      }
+    });
 
-    makeInitBroad() {
-        const c = this.client.channel;
-        const cert = this.cert;
+    return result;
+  }
 
-        return {
-            SVC: 'INIT_BROAD',
-            RESULT: 0,
-            DATA: {
-                center_ip: c.CTIP,
-                center_port: Number(c.CTPT),
-                passwd: this.client.broadPw || '',
-                QUALITY: 'normal',
-                cli_type: 41,
-                cc_cli_type: 19,
-                guid: this.client.guid,
-                append_data: cert.append,
-                gw_ticket: cert.ticket,
-                JOINLOG: this.makePlayLog(),
-            }
-        };
-    }
+  makePlayLog() {
+    const c = this.client.channel;
 
-    makePing() {
-        return {
-            SVC: 'KEEPALIVE',
-            RESULT: 0,
-            DATA: {}
-        };
-    }
+    const cateTag = Array.isArray(c.CATEGORY_TAGS) ? c.CATEGORY_TAGS.join(',') : '';
 
-    makeAddInfo() {
-        const DC1 = '\x11';
-        const DC2 = '\x12';
+    const hashtag = Array.isArray(c.HASH_TAGS) ? c.HASH_TAGS.join(',') : '';
 
-        return (`ad_lang${DC1}ko${DC2}`
-            + `is_auto${DC1}0${DC2}`
-        );
-    }
+    const result = this.makeLog({
+      log: {
+        uuid: this.client.uuid,
+        geo_cc: c.geo_cc,
+        geo_rc: c.geo_rc,
+        acpt_lang: c.acpt_lang,
+        svc_lang: c.svc_lang,
+        is_iframeapi: false,
+        content_lang: c.STRM_LANG_TYPE,
+        os: 'win',
+        is_streamer: false,
+        is_rejoin: false,
+        is_auto: false,
+        is_support_adaptive: true,
+        uuid_3rd: this.client.uuid,
+        subscribe: 0,
+        player_mode: 'landing',
+        sub_view_type: 'non_sub',
+        category_tag: cateTag,
+        tag: hashtag,
+        is_embed: false
+      },
+      liveualog: {
+        is_clearmode: true,
+        lowlatency: c.LOWLAYTENCYBJ,
+        is_streamer: false,
+        os: 'win'
+      }
+    });
 
-    makeJoinLog() {
-        const c = this.client.channel;
+    return result;
+  }
 
-        return this.makeLog({
-            log: {
-                uuid: this.client.uuid,
-                geo_cc: c.geo_cc,
-                geo_rc: c.geo_rc,
-                acpt_lang: c.acpt_lang,
-                svc_lang: c.svc_lang,
-                is_iframeapi: false,
-                content_lang: c.STRM_LANG_TYPE,
-                os: 'win',
-                is_streamer: false,
-                is_rejoin: false,
-                is_auto: false,
-                is_support_adaptive: true,
-                uuid_3rd: this.client.uuid,
-                subscribe: -1,
-                player_mode: 'landing',
-                sub_view_type: 'non_sub',
-                subscription_type: 'basic',
-            },
-            liveualog: {
-                is_clearmode: true,
-                lowlatency: c.LOWLAYTENCYBJ,
-                is_streamer: false,
-                os: 'win',
-            }
-        });
-    }
+  makeLog({ log = {}, liveualog = {} } = {}) {
+    const DC1 = '\x11';
+    const DC2 = '\x12';
+    const SEP = '\x06&\x06';
+    const EQ = '\x06=\x06';
 
-    makePlayLog() {
-        const c = this.client.channel;
+    const make = object => {
+      return Object.entries(object)
+        .filter(([, value]) => value !== undefined && value !== null && value !== '')
+        .map(([key, value]) => {
+          const result = `${SEP}${key}${EQ}${value}`;
 
-        const cateTag = Array.isArray(c.CATEGORY_TAGS)
-            ? c.CATEGORY_TAGS.join(',')
-            : '';
+          return result;
+        })
+        .join('');
+    };
 
-        const hashtag = Array.isArray(c.HASH_TAGS)
-            ? c.HASH_TAGS.join(',')
-            : '';
+    const result =
+      `log${DC1}${make(log)}${DC2}` + `liveualog${DC1}${make(liveualog)}${DC2}`;
 
-        return this.makeLog({
-            log: {
-                uuid: this.client.uuid,
-                geo_cc: c.geo_cc,
-                geo_rc: c.geo_rc,
-                acpt_lang: c.acpt_lang,
-                svc_lang: c.svc_lang,
-                is_iframeapi: false,
-                content_lang: c.STRM_LANG_TYPE,
-                os: 'win',
-                is_streamer: false,
-                is_rejoin: false,
-                is_auto: false,
-                is_support_adaptive: true,
-                uuid_3rd: this.client.uuid,
-                subscribe: 0,
-                player_mode: 'landing',
-                sub_view_type: 'non_sub',
-                category_tag: cateTag,
-                tag: hashtag,
-                is_embed: false,
-            },
-            liveualog: {
-                is_clearmode: true,
-                lowlatency: c.LOWLAYTENCYBJ,
-                is_streamer: false,
-                os: 'win',
-            }
-        });
-    }
-
-    makeLog({ log = {}, liveualog = {} } = {}) {
-        const DC1 = '\x11';
-        const DC2 = '\x12';
-        const SEP = '\x06&\x06';
-        const EQ = '\x06=\x06';
-
-        const make = object => {
-            return Object.entries(object)
-                .filter(([, value]) =>
-                    value !== undefined
-                    && value !== null
-                    && value !== ''
-                )
-                .map(([key, value]) => {
-                    return `${SEP}${key}${EQ}${value}`;
-                })
-                .join('');
-        };
-
-        return (`log${DC1}${make(log)}${DC2}`
-            + `liveualog${DC1}${make(liveualog)}${DC2}`
-        );
-    }
+    return result;
+  }
 }

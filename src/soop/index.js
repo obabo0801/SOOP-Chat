@@ -1,10 +1,10 @@
-export { SoopClient } from './client.js';
-export { SoopManager } from './manager.js';
-export { SoopMacro } from './macro.js';
-export { SoopHistory } from './history.js';
+export { SoopClient } from '#soop/client';
+export { SoopManager } from '#soop/manager';
+export { SoopMacro } from '#soop/macro';
+export { SoopHistory } from '#soop/history';
 
-export * as http from './http.js';
-export * as packet from './packet.js';
-export * as handler from './handler.js';
-export * as weflab from '../utils/weflab.js';
-export * from './config.js';
+export * as http from '#soop/http';
+export * as packet from '#soop/packet';
+export * as handler from '#soop/handler';
+export * as weflab from '#utils/weflab';
+export * from '#soop/config';

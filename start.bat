@@ -4,10 +4,14 @@ title SOOP Chat 🌳
 cd /d "%~dp0"
 
 if not exist "node_modules" (
-    npm install
-    call "%~f0"
+  call npm install
+
+  if errorlevel 1 (
+    pause
+    exit /b 1
+  )
 )
 
 cls
-npm start --silent
+call npm start --silent
 pause
