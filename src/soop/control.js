@@ -6,7 +6,8 @@ import path from 'path';
 export function controlPath() {
     const root = (
         process.platform === 'win32'
-        ? process.cwd().toLowerCase() : process.cwd()
+        ? process.cwd().toLowerCase()
+        : process.cwd()
     );
 
     const key = crypto
@@ -15,7 +16,8 @@ export function controlPath() {
         .digest('hex')
         .slice(0, 16);
 
-    return (process.platform === 'win32'
+    return (
+        process.platform === 'win32'
         ? `\\\\.\\pipe\\soop-chat-${key}`
         : path.join(os.tmpdir(), `soop-chat-${key}.sock`)
     );
@@ -44,7 +46,7 @@ export async function listenControl(stop, run) {
             if (input.trim() !== 'stop') {
                 Promise.resolve().then(() => {
                     if (!run) {
-                        throw new Error('멀티 명령 오류');
+                        throw new Error('명령 오류');
                     }
 
                     return run(JSON.parse(input));
@@ -76,6 +78,10 @@ export async function requestMulti(action, target = '전체') {
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(controlPath());
         socket.setEncoding('utf8');
+        socket.setTimeout(15000, () => {
+            socket.destroy();
+            reject(new Error('명령 시간 초과'));
+        });
 
         let result = '';
 
@@ -90,7 +96,8 @@ export async function requestMulti(action, target = '전체') {
         socket.once('error', error => {
             const message = (
                 ['ENOENT', 'ECONNREFUSED'].includes(error.code)
-                ? '멀티 연결 없음' : '멀티 명령 실패'
+                ? '연결 없음'
+                : '명령 실패'
             );
 
             reject(new Error(message));
@@ -101,12 +108,12 @@ export async function requestMulti(action, target = '전체') {
                 const response = JSON.parse(result);
 
                 if (!response.ok) {
-                    throw new Error('멀티 명령 오류');
+                    throw new Error('명령 오류');
                 }
 
                 resolve(response.data);
             } catch {
-                reject(new Error('멀티 명령 오류'));
+                reject(new Error('명령 오류'));
             }
         });
     });
@@ -116,6 +123,10 @@ export async function stopMulti() {
     return new Promise((resolve, reject) => {
         const socket = net.createConnection(controlPath());
         socket.setEncoding('utf8');
+        socket.setTimeout(20000, () => {
+            socket.destroy();
+            reject(new Error('종료 시간 초과'));
+        });
 
         let result = '';
 

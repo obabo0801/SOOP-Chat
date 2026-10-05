@@ -146,4 +146,6 @@ vite.config.ts.timestamp-*
 /browser.json
 
 /browser-*.json
+
 /tenants.json
+/macros.json

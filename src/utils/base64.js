@@ -8,7 +8,7 @@ function normalize(str) {
 }
 
 function isBase64(str) {
-     if (typeof str !== 'string') {
+    if (typeof str !== 'string') {
         return false;
     }
 
@@ -23,7 +23,7 @@ function isBase64(str) {
         Buffer.from(decoded, 'utf8')
         .toString('base64')
     );
-    
+
     return norm === encoded;
 }
 
@@ -49,7 +49,7 @@ export function decode(str) {
     if (!isBase64(str)) {
         return str;
     }
-    
+
     try {
         return Buffer
             .from(str, 'base64')

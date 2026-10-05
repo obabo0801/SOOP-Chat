@@ -134,6 +134,15 @@ export function makeDirectChat(message, targetId) {
     return makePacket(SVC.DIRECT_CHAT, fields);
 }
 
+export function makeNickName(nickname, type = 1) {
+    const fields = [
+        nickname,
+        type
+    ];
+
+    return makePacket(SVC.SET_NICKNAME, fields);
+}
+
 export function makeSubBj(targetId, index = 0) {
     const fields = [
         targetId,
@@ -190,7 +199,7 @@ export function makeKick(
         broadNo,
         index,
         message
-    ]; 
+    ];
 
     return makePacket(SVC.KICK_AND_CANCEL, fields);
 }
@@ -200,7 +209,7 @@ export function makeBlack(broadNo, adminId, targetId) {
         broadNo,
         adminId,
         targetId
-    ]; 
+    ];
 
     return makePacket(SVC.BDM_ADD_BLACK_INFO, fields);
 }

@@ -42,23 +42,42 @@ export class Bridge {
         const signal = this.client.signal;
 
         await new Promise((resolve, reject) => {
+            let settled = false;
+
+            const finish = error => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                clearTimeout(timeout);
+                signal?.removeEventListener('abort', aborted);
+
+                if (error) {
+                    reject(error);
+                }
+                else {
+                    resolve(true);
+                }
+            };
 
             const timeout = setTimeout(() => {
-                reject('bridge timeout');
+                finish(new Error('브릿지 연결 시간 초과'));
             }, 10000);
+            const aborted = () => finish(new Error('연결 취소'));
+
+            signal?.addEventListener('abort', aborted, { once: true });
 
             ws.on('open', () => {
-                clearTimeout(timeout);
-
                 if (this.ws !== ws || signal?.aborted) {
-                    reject(new Error('연결 취소'));
+                    finish(new Error('연결 취소'));
 
                     return;
                 }
 
                 this.startPing();
                 this.send(this.makeInitGw());
-                resolve(true);
+                finish();
             });
 
             ws.on('message', data => {
@@ -72,17 +91,20 @@ export class Bridge {
             });
 
             ws.on('error', error => {
-                clearTimeout(timeout);
-                reject(error);
+                finish(error);
             });
 
-            ws.on('close', (code, reason) => {
-                clearTimeout(timeout);
-                this.stopPing();
-                reject(new Error(
-                    '브릿지 연결이 완료되기 전에 연결이 종료되었습니다.'
-                ));
+            ws.on('close', () => {
+                if (this.ws === ws) {
+                    this.stopPing();
+                }
+
+                finish(new Error('브릿지 연결 종료'));
             });
+
+            if (signal?.aborted) {
+                aborted();
+            }
         });
     }
 
@@ -145,6 +167,10 @@ export class Bridge {
     }
 
     handler(packet = {}) {
+        if (!packet || typeof packet !== 'object' || Array.isArray(packet)) {
+            return;
+        }
+
         const { SVC, DATA } = packet;
 
         switch (SVC) {
@@ -158,7 +184,7 @@ export class Bridge {
         case 'JOINCH_COMMON':
             this.onJoin(DATA);
             break;
-        
+
         case 'CCP_SVC_JOINCH_COMMON':
             this.onFail(DATA);
             break;
@@ -168,7 +194,7 @@ export class Bridge {
 
         case 'GETCHINFOEX':
             break;
-        
+
         case 'SETCHINFO':
             break;
 
@@ -233,7 +259,7 @@ export class Bridge {
             bjId: this.client.bjId,
             bjNick: this.client.bjNick,
         };
-        
+
         this.client.emit('open', info);
     }
 

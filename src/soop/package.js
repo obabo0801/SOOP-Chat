@@ -30,11 +30,11 @@ export class Package extends EventEmitter {
         });
 
         if (this.closed) {
-            throw new Error('패키지 연결이 취소되었습니다.');
+            throw new Error('패키지 연결 취소');
         }
 
         if (this.channel?.RESULT !== 1 || !this.channel.BNO) {
-            throw new Error('방송 정보를 확인할 수 없습니다.');
+            throw new Error('방송 정보 없음');
         }
 
         this.checkQuality(this.quality);
@@ -75,7 +75,7 @@ export class Package extends EventEmitter {
                 const port = Number(packet.DATA?.HTMLPLAYER_PORT);
 
                 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-                    this.fail(new Error('패키지를 확인할 수 없습니다.'));
+                    this.fail(new Error('패키지 정보 없음'));
 
                     return;
                 }
@@ -86,12 +86,12 @@ export class Package extends EventEmitter {
             });
             ws.on('error', () => {
                 if (this.manager === ws) {
-                    this.fail(new Error('숲 패키지에 연결할 수 없습니다.'));
+                    this.fail(new Error('패키지 연결 실패'));
                 }
             });
             ws.on('close', () => {
                 if (this.manager === ws) {
-                    this.fail(new Error('숲 패키지 연결이 종료되었습니다.'));
+                    this.fail(new Error('패키지 연결 종료'));
                 }
             });
         });
@@ -153,18 +153,22 @@ export class Package extends EventEmitter {
                 return;
             }
 
-            this.fail(new Error('패키지 미디어 연결에 실패했습니다.'));
+            this.fail(new Error('미디어 연결 실패'));
         });
         ws.on('close', () => {
             if (this.ws !== ws) {
                 return;
             }
 
-            this.fail(new Error('패키지 미디어 연결이 종료되었습니다.'));
+            this.fail(new Error('미디어 연결 종료'));
         });
     }
 
     handler(packet) {
+        if (!packet || typeof packet !== 'object' || Array.isArray(packet)) {
+            return;
+        }
+
         const { SVC: svc, RESULT: result, DATA: data = {} } = packet;
 
         if (Number(result) === -1990 && this.ready
@@ -175,67 +179,67 @@ export class Package extends EventEmitter {
         }
 
         if (Number(result) < 0 || svc === PACKAGE.ERROR) {
-            this.fail(new Error(`패키지 요청에 실패했습니다. (${result})`));
+            this.fail(new Error(`패키지 요청 실패 (${result})`));
 
             return;
         }
 
         switch (svc) {
-            case PACKAGE.CERTTICKET:
-                if (!data.pcTicket) {
-                    this.fail(new Error('패키지 인증 정보를 확인할 수 없습니다.'));
+        case PACKAGE.CERTTICKET:
+            if (!data.pcTicket) {
+                this.fail(new Error('패키지 인증 오류'));
 
-                    return;
-                }
+                return;
+            }
 
-                this.send(PACKAGE.INIT_BROAD, this.makeInitBroad(data));
-                break;
-            case PACKAGE.INIT_BROAD:
-                this.send(PACKAGE.START);
-                break;
-            case PACKAGE.START:
-                this.info = data;
-                break;
-            case PACKAGE.QUALITY: {
-                const value = Number(data.QUALITY);
-                const requested = this.pending?.quality || this.quality;
-                const quality = QUALITY[requested] === value
-                    ? requested
-                    : Object.keys(QUALITY).find(key => QUALITY[key] === value);
+            this.send(PACKAGE.INIT_BROAD, this.makeInitBroad(data));
+            break;
+        case PACKAGE.INIT_BROAD:
+            this.send(PACKAGE.START);
+            break;
+        case PACKAGE.START:
+            this.info = data;
+            break;
+        case PACKAGE.QUALITY: {
+            const value = Number(data.QUALITY);
+            const requested = this.pending?.quality || this.quality;
+            const quality = QUALITY[requested] === value
+                ? requested
+                : Object.keys(QUALITY).find(key => QUALITY[key] === value);
 
-                if (!quality) {
-                    break;
-                }
-
-                this.quality = quality;
-
-                if (this.ready) {
-                    this.info = null;
-                    this.finish();
-                    this.emit('quality', this.result());
-                }
-
+            if (!quality) {
                 break;
             }
-            case PACKAGE.BROADEND:
-            case PACKAGE.CLOSECH:
-            case PACKAGE.CENTER_CLOSE:
-            case PACKAGE.NOTIFY:
-                this.fail(new Error('패키지 방송 연결이 종료되었습니다.'));
-                break;
+
+            this.quality = quality;
+
+            if (this.ready) {
+                this.info = null;
+                this.finish();
+                this.emit('quality', this.result());
+            }
+
+            break;
+        }
+        case PACKAGE.BROADEND:
+        case PACKAGE.CLOSECH:
+        case PACKAGE.CENTER_CLOSE:
+        case PACKAGE.NOTIFY:
+            this.fail(new Error('패키지 방송 종료'));
+            break;
         }
     }
 
     checkQuality(quality) {
         if (!Object.hasOwn(QUALITY, quality)
             || !this.channel.VIEWPRESET?.some(item => item.name === quality)) {
-            throw new Error(`지원하지 않는 화질입니다. (${quality})`);
+            throw new Error(`화질 오류 (${quality})`);
         }
     }
 
     async change(quality) {
         if (this.pending || !this.ready || this.closed) {
-            throw new Error('패키지 연결 또는 화질 변경이 진행 중입니다.');
+            throw new Error('패키지 처리 중');
         }
 
         this.checkQuality(quality);
@@ -275,7 +279,7 @@ export class Package extends EventEmitter {
 
     wait(resolve, reject, quality = this.quality) {
         const timer = setTimeout(() => {
-            this.fail(new Error('패키지 응답 시간이 초과되었습니다.'));
+            this.fail(new Error('패키지 응답 시간 초과'));
         }, 20000);
         this.pending = { resolve, reject, quality, timer };
     }
@@ -327,7 +331,7 @@ export class Package extends EventEmitter {
         this.emit('error', error);
     }
 
-    close(error = new Error('패키지 연결이 중지되었습니다.')) {
+    close(error = new Error('패키지 연결 중지')) {
         if (this.closed) {
             return false;
         }

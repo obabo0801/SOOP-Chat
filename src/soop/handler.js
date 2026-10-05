@@ -23,7 +23,7 @@ export function dispatch(soop, pkt) {
     const fields = pkt.fields;
 
     switch (pkt.service) {
-    
+
     // 1
     case SVC.LOGIN: {
         soop.userId = fields[0];
@@ -120,7 +120,7 @@ export function dispatch(soop, pkt) {
         });
         break;
     }
-    
+
     // 5
     case SVC.CHAT: {
         if (error(fields, 2)) {
@@ -350,7 +350,7 @@ export function dispatch(soop, pkt) {
             language: fields[12] || 'ko_KR',
             urlModify: fields[13],
         };
-        
+
         soop.emit('balloon', {
              ...data,
              imageUrl: soop.makeBalloonUrl(data)
@@ -583,7 +583,7 @@ export function dispatch(soop, pkt) {
             soop.emit('error', fields[0]);
             break;
         }
-        
+
         const org = Number(fields[3]);
         const trans = Number(fields[4]);
 
@@ -807,7 +807,7 @@ export function dispatch(soop, pkt) {
             soop.emit('error', error);
             break;
         }
-        
+
         soop.emit('missionSettle', data);
         break;
     }

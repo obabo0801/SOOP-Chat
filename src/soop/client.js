@@ -100,7 +100,7 @@ export class SoopClient {
             .randomBytes(16)
             .toString('hex')
         );
-        
+
         this.guid = (
             options.guid
             ||  crypto
@@ -151,6 +151,10 @@ export class SoopClient {
     }
 
     emit(event, ...args) {
+        if (event === 'error' && !(args[0] instanceof Error)) {
+            args[0] = new Error(String(args[0] || '연결 실패'));
+        }
+
         const handlers = this.events.get(event) || [];
 
         for (const handler of handlers) {
@@ -171,7 +175,7 @@ export class SoopClient {
                 this.emit('error', error);
             });
     }
-    
+
     isOpen() {
         return Boolean(this.ws
             && this.ws.readyState === WebSocket.OPEN
@@ -441,9 +445,7 @@ export class SoopClient {
             };
 
             const timeout = setTimeout(() => {
-                finish(new Error(
-                    '채팅 연결 시간이 초과되었습니다.'
-                ));
+                finish(new Error('채팅 연결 시간 초과'));
             }, 10000);
 
             const aborted = () => finish(new Error('연결 취소'));
@@ -491,7 +493,7 @@ export class SoopClient {
                 }
 
                 handler.dispatch(
-                    this, 
+                    this,
                     packet.parse(data)
                 );
             });
@@ -514,9 +516,7 @@ export class SoopClient {
                     }
                 }
 
-                finish(new Error(
-                    '채팅 연결이 완료되기 전에 연결이 종료되었습니다.'
-                ));
+                finish(new Error('채팅 연결 종료'));
             });
         });
     }
@@ -529,7 +529,7 @@ export class SoopClient {
         if (!url) {
             return false;
         }
-        
+
         const headers = {
             ...this.network.socketOptions.headers,
             ...(this.cookie ? {
@@ -630,7 +630,6 @@ export class SoopClient {
         this.disconnect(false);
         this.stopLive();
         this.stopContent();
-        await this.network.close();
     }
 
     makeChatUrl(channel = {}) {
@@ -748,7 +747,7 @@ export class SoopClient {
         if (!this.bjId && !this.auto) {
             return false;
         }
-        
+
         if (this.isOpen()) {
             return false;
         }
@@ -918,7 +917,10 @@ export class SoopClient {
 
             const list = await load[type]();
 
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+            if (
+                this.contentWatch !== watch
+                || cookie !== http.cookieString(this.cookie)
+            ) {
                 return false;
             }
 
@@ -961,8 +963,10 @@ export class SoopClient {
                 }
 
                 state.records.set(id, {
-                    data, auth: [101, 102].includes(auth) ? auth : record?.auth ?? null,
-                    missing: 0, removed: false
+                    data,
+                    auth: [101, 102].includes(auth) ? auth : record?.auth ?? null,
+                    missing: 0,
+                    removed: false
                 });
 
                 const signature = JSON.stringify([
@@ -1000,7 +1004,10 @@ export class SoopClient {
             state.current = current;
             await this.checkMissing(state, watch, cookie, events);
 
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+            if (
+                this.contentWatch !== watch
+                || cookie !== http.cookieString(this.cookie)
+            ) {
                 return false;
             }
 
@@ -1041,7 +1048,10 @@ export class SoopClient {
 
     async checkMissing(state, watch, cookie, events) {
         for (const id of [...state.pending].slice(0, 10)) {
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+            if (
+                this.contentWatch !== watch
+                || cookie !== http.cookieString(this.cookie)
+            ) {
                 return;
             }
 
@@ -1066,7 +1076,10 @@ export class SoopClient {
                 continue;
             }
 
-            if (this.contentWatch !== watch || cookie !== http.cookieString(this.cookie)) {
+            if (
+                this.contentWatch !== watch
+                || cookie !== http.cookieString(this.cookie)
+            ) {
                 record.missing = 0;
                 state.pending.add(id);
 
@@ -1190,7 +1203,10 @@ export class SoopClient {
                 return null;
             }
 
-            if (total !== null && (total !== meta.total || lastPage !== meta.last_page)) {
+            if (
+                total !== null && (total !== meta.total
+                || lastPage !== meta.last_page)
+            ) {
                 return null;
             }
 
@@ -1278,7 +1294,9 @@ export class SoopClient {
         }
 
         const baseline = !previous || previous.auth !== auth;
-        const state = baseline ? { auth, items: new Map(), missing: new Map() } : previous;
+        const state = baseline
+            ? { auth, items: new Map(), missing: new Map() }
+            : previous;
         const current = new Map();
         const events = [];
 
@@ -1346,6 +1364,7 @@ export class SoopClient {
 
         const bridge = new Bridge(this);
         this.bridge = bridge;
+        const signal = this.signal;
 
         return new Promise(resolve => {
             let settled = false;
@@ -1360,7 +1379,7 @@ export class SoopClient {
 
                 this.off('error', onError);
                 this.off('open', onOpen);
-                this.signal?.removeEventListener('abort', onAbort);
+                signal?.removeEventListener('abort', onAbort);
 
                 if (!result && this.bridge === bridge) {
                     this.closeBridge();
@@ -1374,9 +1393,7 @@ export class SoopClient {
             const onAbort = () => finish(false);
             const timeout = setTimeout(() => {
                 try {
-                    this.emit('error', new Error(
-                        '브릿지 입장 시간이 초과되었습니다.'
-                    ));
+                    this.emit('error', new Error('브릿지 입장 시간 초과'));
                 } finally {
                     finish(false);
                 }
@@ -1384,9 +1401,15 @@ export class SoopClient {
 
             this.on('error', onError);
             this.on('open', onOpen);
-            this.signal?.addEventListener('abort', onAbort, { once: true });
+            signal?.addEventListener('abort', onAbort, { once: true });
 
             bridge.connect().catch(error => {
+                if (this.bridge !== bridge || signal?.aborted) {
+                    finish(false);
+
+                    return;
+                }
+
                 try {
                     this.emit('error', error);
                 } finally {
@@ -1652,18 +1675,30 @@ export class SoopClient {
     }
 
     sendChat(message = '') {
+        message = message.replace(/\\r\\n|\\n/g, '\n');
+
         return this.send(
             packet.makeChat(message)
         );
     }
 
+    sendNickName(nickname = '') {
+        return this.send(
+            packet.makeNickName(nickname)
+        );
+    }
+
     sendManagerChat(message = '') {
+        message = message.replace(/\\r\\n|\\n/g, '\n');
+
         return this.send(packet.makeManagerChat(
             message
         ));
     }
 
     sendDirectChat(message = '', targetId = '') {
+        message = message.replace(/\\r\\n|\\n/g, '\n');
+
         return this.send(packet.makeDirectChat(
             message, targetId
         ));
@@ -1908,7 +1943,7 @@ export class SoopClient {
         });
     }
 
-    async sendIceMode(type = 'ice_on', auth = 100001) { 
+    async sendIceMode(type = 'ice_on', auth = 100001) {
         if (this.idle) {
             return false;
         }
@@ -1986,7 +2021,7 @@ export class SoopClient {
         return result;
     }
 
-    async sendPoll(index) { 
+    async sendPoll(index) {
         if (this.idle) {
             return false;
         }
@@ -2009,7 +2044,7 @@ export class SoopClient {
         return result;
     }
 
-    async sendPollList(surveyNo) { 
+    async sendPollList(surveyNo) {
         const result = (
             await http.getPoll(
             this.bjId,
@@ -2024,6 +2059,8 @@ export class SoopClient {
     }
 
     async sendOgq(message, ogqId, index = 1) {
+        message = String(message || '').replace(/\\r\\n|\\n/g, '\n');
+
         if (this.idle) {
             return false;
         }
@@ -2169,7 +2206,7 @@ export class SoopClient {
         if (!data) {
             return null;
         }
-        
+
         const emoticons = this.findEmoticon(
             data.message
         );
@@ -2385,70 +2422,67 @@ export class SoopClient {
         const map = new Map();
 
         for (const type of ['default', 'subscribe']) {
-            
-        const section = data?.[type];
+            const section = data?.[type];
 
-        if (!section) {
-            continue;
+            if (!section) {
+                continue;
+            }
+
+            for (const group of section.groups || []) {
+                for (const emoticon of group.emoticons || []) {
+                    if (emoticon.isDeprecated) {
+                        continue;
+                    }
+
+                    map.set(emoticon.keyword, {
+                        type,
+                        group: group.title,
+                        keyword: emoticon.keyword,
+                        fileName: emoticon.fileName,
+                        smallUrl: new URL(
+                            emoticon.fileName, section.small_url
+                        ).href,
+                        bigUrl: new URL(
+                            emoticon.fileName, section.big_url
+                        ).href
+                    });
+                }
+            }
         }
-
-        for (const group of section.groups || []) {
-        for (const emoticon of group.emoticons || []) {
-
-        if (emoticon.isDeprecated) {
-            continue;
-        }
-
-        map.set(emoticon.keyword, {
-            type,
-            group: group.title,
-            keyword: emoticon.keyword,
-            fileName: emoticon.fileName,
-            smallUrl: new URL(
-                emoticon.fileName, section.small_url
-            ).href,
-            bigUrl: new URL(
-                emoticon.fileName, section.big_url
-            ).href
-        });
-
-        }}}
 
         const url = new URL(
             `/signature_emoticon/${this.bjId}/`,
             DOMAIN.static
         );
 
-        for (const [tierKey, list] of 
+        for (const [tierKey, list] of
             Object.entries(signature || {})
         ) {
+            const tier = Number(
+                tierKey.replace('tier', '')
+            );
 
-        const tier = Number(
-            tierKey.replace('tier', '')
-        );
+            for (const item of list || []) {
+                const title = item.title;
+                const keyword = `/${title}/`;
 
-        for (const item of list || []) {
-        
-        const title = item.title;
-        const keyword = `/${title}/`;
-
-        map.set(keyword, {
-            type: 'signature',
-            group: tierKey,
-            title,
-            keyword,
-            tier,
-            order: Number(item.order_no),
-            fileName: item.pc_img,
-            smallUrl: new URL(
-                item.mobile_img, url.href
-            ).href,
-            bigUrl: new URL(
-                item.pc_img, url.href
-            ).href
-        });
-
-        }}
+                map.set(keyword, {
+                    type: 'signature',
+                    group: tierKey,
+                    title,
+                    keyword,
+                    tier,
+                    order: Number(item.order_no),
+                    fileName: item.pc_img,
+                    smallUrl: new URL(
+                        item.mobile_img, url.href
+                    ).href,
+                    bigUrl: new URL(
+                        item.pc_img, url.href
+                    ).href
+                });
+            }
+        }
 
         return map;
     }

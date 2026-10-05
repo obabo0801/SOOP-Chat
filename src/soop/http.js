@@ -14,7 +14,7 @@ export const AGENT = (
 
 export const ACCEPT_LANGUAGE = (
     'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
-)
+);
 
 export const USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -28,7 +28,7 @@ export async function getStation(userId, options = {}) {
         DOMAIN.chapi
     );
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'GET'
     });
@@ -44,7 +44,7 @@ export async function getStatus(userId, options = {}) {
 
     url.searchParams.set('szBjId', userId);
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'GET'
     });
@@ -73,7 +73,7 @@ export async function postLiveInfo(bjId, options = {}) {
         is_revive: false,
     });
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'POST',
         body
@@ -112,9 +112,7 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
     );
 
     if (!preset) {
-        throw new Error(
-            '지원하지 않는 방송 화질입니다.'
-        );
+        throw new Error('화질 오류');
     }
 
     const url = new URL(
@@ -251,7 +249,7 @@ export async function getSessionAllow(options = {}) {
         DOMAIN.member
     );
 
-    const raw =  await requestRaw(url, {
+    const raw = await requestRaw(url, {
         ...options,
         method: 'GET'
     });
@@ -270,7 +268,7 @@ export async function postChatRule(bjId, options = {}) {
         szAction: 'get'
     });
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'POST',
         body
@@ -376,14 +374,16 @@ export async function getContent(bjId, titleNo, options = {}) {
         DOMAIN.chapi
     );
     const response = await fetch(url, {
-        dispatcher: options.dispatcher,
         headers: {
             Accept: AGENT,
             'User-Agent': options.headers?.['User-Agent'] || USER_AGENT,
             ...options.headers,
             ...(options.cookie ? { Cookie: cookieString(options.cookie) } : {})
         },
-        signal: AbortSignal.timeout(10000)
+        signal: (options.signal
+            ? AbortSignal.any([options.signal, AbortSignal.timeout(10000)])
+            : AbortSignal.timeout(10000)
+        )
     });
     const data = await response.json();
 
@@ -420,7 +420,7 @@ export async function getPoll(bjId, surveyNo, options = {}) {
     url.searchParams.set('szBjId', bjId);
     url.searchParams.set('nSurveyNo', surveyNo);
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'GET'
     });
@@ -443,7 +443,7 @@ export async function postPoll(
         nAnswerNo: index
     });
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'POST',
         body
@@ -624,6 +624,10 @@ export async function postOgqList(bjId, options = {}) {
 export async function postOgqChat(
     channel, userId, message, ogqId, index = 1, options = {}
 ) {
+    const chatId = String(userId || channel.USERID || '');
+
+    userId = chatId.replace(/\(\d+\)$/, '');
+
     const url = new URL(
         '/api/ogq.php',
         DOMAIN.live
@@ -633,7 +637,7 @@ export async function postOgqChat(
         chat_ip: channel.CHIP,
         chat_port: channel.CHPT,
         chat_no: channel.CHATNO,
-        chat_id: channel.USERID,
+        chat_id: chatId,
         chat_message: message,
         bj_id: channel.BJID,
         ogq_id: ogqId,
@@ -674,7 +678,7 @@ export async function postChallenge(bjId, options = {}) {
         szStatus: JSON.stringify(status)
     });
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'POST',
         body
@@ -694,7 +698,7 @@ export async function postMission(bjId, options = {}) {
         szBjId: bjId
     });
 
-    const json =  await requestJson(url, {
+    const json = await requestJson(url, {
         ...options,
         method: 'POST',
         body
@@ -752,10 +756,13 @@ export async function postLogin(body, options = {}) {
         'Referer': referer.href,
     };
 
-    const raw =  await requestRaw(url, {
+    const raw = await requestRaw(url, {
         ...options,
         method: 'POST',
-        headers,
+        headers: {
+            ...options.headers,
+            ...headers
+        },
         body
     });
 
@@ -836,7 +843,6 @@ export async function requestRaw(url, options = {}) {
     }
 
     const res = await fetch(url, {
-        dispatcher: options.dispatcher,
         signal: (options.signal
             ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)])
             : AbortSignal.timeout(15000)
@@ -891,7 +897,7 @@ export function cookieExtract(data) {
     }
 
     const cookie = data.headers.get('set-cookie');
-    
+
     return cookie ? [cookie] : [];
 }
 

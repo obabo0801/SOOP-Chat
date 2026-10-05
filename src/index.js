@@ -1,6 +1,7 @@
 import { config } from 'dotenv';
 import readline from 'readline';
 import { SoopClient } from '#soop/client';
+import { SoopMacro } from '#soop/macro';
 import * as http from '#soop/http';
 import * as control from '#soop/control';
 import * as log from '#utils/log';
@@ -15,8 +16,8 @@ const rl = readline.createInterface({
     prompt: ''}
 );
 
-let client, isLink, isList, mode;
-let stopTask;
+let client, isLink, isList
+let mode, macro, stopTask;
 
 (async () => {
     loadConfig();
@@ -42,10 +43,10 @@ let stopTask;
     // 참여자 목록 표시
     isList = getConfig('isList') ?? false;
 
-    // 참여자 목록 및 입퇴장 수신
-    // 0: 참여자 목록 표시, 입장/퇴장 모두 표시
-    // 1: 입장/퇴장 모두 표시
-    // 2: 입장/퇴장 열혈 이상 표시
+    // SOOP 서버에 요청하는 참여자 정보 수신 범위
+    // 0: 참여자 목록, 전체 입장/퇴장 수신
+    // 1: 전체 입장/퇴장 수신
+    // 2: 열혈 이상 입장/퇴장 수신
     const pver = getConfig('pver');
 
     // 자막이 허용된 방송에서 자막 표시
@@ -63,14 +64,8 @@ let stopTask;
         bjId, broadPw, auto,
         pver, subtitle, cookie,
         idle: process.env.IDLE?.toLowerCase() === 'true',
-        userAgent: process.env.USER_AGENT || undefined,
-        proxy: process.env.PROXY || undefined
+        userAgent: process.env.USER_AGENT || undefined
     });
-
-    const browser = (
-        process.env.BROWSER
-            ?.toLowerCase() === 'true'
-    );
 
     // live
     client.on('live', data => {
@@ -238,11 +233,11 @@ let stopTask;
         case 1:
             message = '스트리머에 의해 강제퇴장 되었습니다.';
             break;
-        
+
         case 2:
             message = '매니저에 의해 강제퇴장 되었습니다.';
             break;
-        
+
         default:
             message = `${data.adminNick}에 의해 강제퇴장 되었습니다.`;
             break;
@@ -273,16 +268,16 @@ let stopTask;
     // userList
     client.on('userList', data => {
         if (isList) { //----------------------------------------------------
-        const start = client.userList.size - data.length;
+            const start = client.userList.size - data.length;
 
-        const list = data
-            .map((user, index) => {
-                return `${start + index + 1}. ${user.name}(${user.id}) [${user.role}]`;
-            }
-        ).join('\n');
+            const list = data
+                .map((user, index) => {
+                    return `${start + index + 1}. ${user.name}(${user.id}) [${user.role}]`;
+                }
+            ).join('\n');
 
-        
-        log.info(`[참여인원]\n${list}`);
+
+            log.info(`[참여인원]\n${list}`);
 
         } //----------------------------------------------------------------
     });
@@ -328,22 +323,22 @@ let stopTask;
 
         if (isLink) { //----------------------------------------------------
 
-        const extras = client.findAssets(data);
+            const extras = client.findAssets(data);
 
-        for (const item of extras.emoticons) {
-            log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
-        }
+            for (const item of extras.emoticons) {
+                log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
+            }
 
-        if (extras.tierUrl) {
-            log.load('[구독]', extras.tierUrl);
-        }
+            if (extras.tierUrl) {
+                log.load('[구독]', extras.tierUrl);
+            }
 
         } //----------------------------------------------------------------
 
         let badge = data.tier
             ? `${data.tierName} | ${data.subMonth}개월] [${data.role}`
-            : data.role
-        
+            : data.role;
+
         switch (data.role) {
         case '스트리머':
             badge = `\x1b[38;2;255;102;0m[${badge}]\x1b[0m\x1b[1m`;
@@ -373,15 +368,15 @@ let stopTask;
     client.on('directChat', data => {
         if (isLink) { //----------------------------------------------------
 
-        const extras = client.findAssets(data);
+            const extras = client.findAssets(data);
 
-        for (const item of extras.emoticons) {
-            log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
-        }
+            for (const item of extras.emoticons) {
+                log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
+            }
 
-        if (extras.tierUrl) {
-            log.load('[구독]', extras.tierUrl);
-        }
+            if (extras.tierUrl) {
+                log.load('[구독]', extras.tierUrl);
+            }
 
         } //----------------------------------------------------------------
 
@@ -395,7 +390,7 @@ let stopTask;
 
         const badge = data.tier
             ? `${data.tier} | ${data.subMonth}개월] [${data.role}`
-            : data.role
+            : data.role;
 
         log.load('[귓속말]', `\x1b[1m[${badge}]`, `${message}\x1b[0m`);
     });
@@ -423,9 +418,9 @@ let stopTask;
 
     // sticker
     client.on('sticker', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]', data.imageUrl)
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl)
 
         } //----------------------------------------------------------------
 
@@ -475,22 +470,22 @@ let stopTask;
     client.on('managerChat', data => {
         if (isLink) { //----------------------------------------------------
 
-        const extras = client.findAssets(data);
+            const extras = client.findAssets(data);
 
-        for (const item of extras.emoticons) {
-            log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
-        }
+            for (const item of extras.emoticons) {
+                log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
+            }
 
-        if (extras.tierUrl) {
-            log.load('[구독]', extras.tierUrl);
-        }
+            if (extras.tierUrl) {
+                log.load('[구독]', extras.tierUrl);
+            }
 
         } //----------------------------------------------------------------
 
         let badge = data.tier
             ? `${data.tierName} | ${data.subMonth}개월] [${data.role}`
-            : data.role
-        
+            : data.role;
+
         switch (data.role) {
         case '스트리머':
             badge = `\x1b[38;2;255;102;0m[${badge}]\x1b[0m\x1b[1m`;
@@ -512,8 +507,11 @@ let stopTask;
             return;
         }
 
-        log.warn(data.item?.plus ? '[퀵뷰 플러스 선물]' : '[퀵뷰 선물]',  `${data.fromNick}(${data.fromId})님이`,
-            `${data.toNick}(${data.toId})님에게`, `${data.item.name} ${data.item.days}일권 선물 하셨습니다.`
+        log.warn(
+            data.item?.plus ? '[퀵뷰 플러스 선물]' : '[퀵뷰 선물]',
+            `${data.fromNick}(${data.fromId})님이`,
+            `${data.toNick}(${data.toId})님에게`,
+            `${data.item.name} ${data.item.days}일권 선물 하셨습니다.`
         );
     });
 
@@ -628,9 +626,9 @@ let stopTask;
 
     // follow
     client.on('follow', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
@@ -641,14 +639,14 @@ let stopTask;
             ? `${tier} ${data.tierName}` : `${tier}`
         );
 
-        log.warn('[구독]', `\x1b[1m${data.userId}(${data.userNick})님이 ${tierName} ${data.month}개월 구독하였습니다.\x1b[0m`);
+        log.warn('[구독]', `\x1b[1m${data.userNick}(${data.userId})님이 ${tierName} ${data.month}개월 구독하였습니다.\x1b[0m`);
     });
 
     // followEffect
     client.on('followEffect', data => {
         if (isLink) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
@@ -659,7 +657,7 @@ let stopTask;
             ? `${tier} ${data.tierName}` : `${tier}`
         );
 
-        log.warn('[연속 구독]', `\x1b[1m${data.userId}(${data.userNick})님이 ${tierName} ${data.month}개월째 구독 중입니다. (누적 ${data.accMonth}개월)\x1b[0m`);
+        log.warn('[연속 구독]', `\x1b[1m${data.userNick}(${data.userId})님이 ${tierName} ${data.month}개월째 구독 중입니다. (누적 ${data.accMonth}개월)\x1b[0m`);
     });
 
     // translationState
@@ -672,7 +670,7 @@ let stopTask;
     // translation
     client.on('translation', data => {
         log.info('[번역]', `\x1b[1m${data.message} (${data.before.label} → ${data.after.label})\x1b[0m`);
-        
+
         if (data.mode === 2) {
             rl.write(data.message);
         }
@@ -714,8 +712,8 @@ let stopTask;
 
         let badge = data.tier
             ? `${data.tierName} | ${data.subMonth}개월] [${data.role}`
-            : data.role
-        
+            : data.role;
+
         switch (data.role) {
         case '스트리머':
             badge = `\x1b[38;2;255;102;0m[${badge}]\x1b[0m\x1b[1m`;
@@ -737,22 +735,22 @@ let stopTask;
             badge = `\x1b[90m[${badge}]\x1b[0m`;
             break;
         }
-        
+
         const message = data.message ? `: ${data.message}` : '';
 
         if (isLink) { //----------------------------------------------------
-        
-        const extras = client.findAssets(data);
 
-        for (const item of extras.emoticons) {
-            log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
-        }
+            const extras = client.findAssets(data);
 
-        if (extras.tierUrl) {
-            log.load('[구독]', extras.tierUrl);
-        }
+            for (const item of extras.emoticons) {
+                log.info('\x1b[38;5;187m[이모티콘]', item.keyword, item.smallUrl);
+            }
 
-        log.warn('[OGQ]', badge, `${data.userNick}(${data.userId})${message}`, data.imageUrl);
+            if (extras.tierUrl) {
+                log.load('[구독]', extras.tierUrl);
+            }
+
+            log.warn('[OGQ]', badge, `${data.userNick}(${data.userId})${message}`, data.imageUrl);
 
         } //----------------------------------------------------------------
 
@@ -771,13 +769,13 @@ let stopTask;
 
     // ogqGift
     client.on('ogqGift', data => {
-        if (isLink) { //----------------------------------------------------
-        
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+        if (isLink && !data.test) { //----------------------------------------------------
+
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[OGQ 선물]', 
+        log.warn('[OGQ 선물]',
             `\x1b[1m${data.fromNick}(${data.fromId})님이 `
             + `${data.receivedName}(${data.receivedId})님에게 `
             + `${data.title} OGQ 이모티콘을 선물 하셨습니다.\x1b[0m`
@@ -802,13 +800,13 @@ let stopTask;
 
     // ballon
     client.on('balloon', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `\x1b[1m${data.userNick}(${data.userId}) 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.fanOrder > 0) {
             log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
@@ -821,13 +819,13 @@ let stopTask;
 
     // adcon
     client.on('adcon', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `\x1b[1m${data.userNick}(${data.userId}) 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.fanOrder > 0) {
             log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
@@ -840,13 +838,13 @@ let stopTask;
 
     // videoBalloon
     client.on('videoBalloon', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[영상 후원]', `]\x1b[1m${data.userNick}(${data.userId}) 영상 풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`, data.raw);
+        log.warn('[영상 후원]', `\x1b[1m${data.userNick}(${data.userId}) 영상 풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`, data.raw);
 
         if (data.fanOrder > 0) {
             log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
@@ -855,28 +853,28 @@ let stopTask;
         if (data.topFan > 0) {
             log.info('\x1b[38;2;214;91;143m\x1b[1m[열혈팬]', `${data.userNick}님이 열혈팬이 되셨습니다.\x1b[0m`);
         }
-    })
+    });
 
     // vodBalloon
     client.on('vodBalloon', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) VOD 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `\x1b[1m${data.userNick}(${data.userId}) VOD 별풍선 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
     });
 
     // vodAdcon
     client.on('vodAdcon', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m${data.userNick}(${data.userId}) VOD 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `\x1b[1m${data.userNick}(${data.userId}) VOD 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
 
         if (data.fanOrder === 1) {
             log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${data.userNick}님이 ${data.fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
@@ -889,21 +887,21 @@ let stopTask;
 
     // stationAdcon
     client.on('stationAdcon', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
-        log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+            log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
 
         } //----------------------------------------------------------------
 
-        log.warn('[후원]', `]\x1b[1m방송국에서 ${data.userNick}(${data.userId})님이 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
+        log.warn('[후원]', `\x1b[1m방송국에서 ${data.userNick}(${data.userId})님이 애드벌룬 ${data.count}개를 선물 하셨습니다.\x1b[0m`);
     });
 
     // challenge
     client.on('challenge', data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
             if (data.imageUrl) {
-                log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+                log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
             }
         } //----------------------------------------------------------------
 
@@ -912,16 +910,16 @@ let stopTask;
         if (data.type === 'CHALLENGE_GIFT') {
             message = `${data.user_nick}(${data.user_id})님 도전미션 ${data.title} 별풍선 ${data.gift_count}개 후원했습니다.`;
         }
-        
+
         else if (data.type === 'CHALLENGE_SETTLE') {
             message = `도전미션으로 별풍선 ${data.settle_count}개 획득했습니다.`;
         }
-        
+
         else {
             if (data.mission_status === 'SUCCESS') {
                 message = `[${data.title}]이 미션을 성공하였습니다! 스트리머에게 축하의 별풍선을 선물해보세요!`;
             }
-            
+
             else {
                 message = `[${data.title}]이 미션을 달성하지 못하였습니다. 다음 도전을 응원해주세요!`;
             }
@@ -932,10 +930,10 @@ let stopTask;
 
     // battle
     client.on('battle', async data => {
-        if (isLink) { //----------------------------------------------------
+        if (isLink && !data.test) { //----------------------------------------------------
 
             if (data.imageUrl) {
-                log.info('\x1b[38;5;187m[이미지]]', data.imageUrl);
+                log.info('\x1b[38;5;187m[이미지]', data.imageUrl);
             }
         } //----------------------------------------------------------------
 
@@ -944,11 +942,11 @@ let stopTask;
         if (data.type === 'GIFT') {
             message = `${data.user_nick}(${data.user_id})님 대결미션 ${data.title} 별풍선 ${data.gift_count}개 후원했습니다.`;
         }
-        
+
         else if (data.type === 'SETTLE') {
             message = `대결미션으로 별풍선 ${data.settle_count}개 획득했습니다.`;
         }
-        
+
         else if (data.type === 'NOTICE') {
             if (data.draw) {
                 message = `[${data.title}] 대결미션 결과 무승부입니다! 참여한 스트리머에게 수고의 별풍선을 선물해 보세요.`;
@@ -960,6 +958,10 @@ let stopTask;
         }
 
         log.warn('[후원]', `\x1b[1m${message}\x1b[0m`);
+
+        if (data.test) {
+            return;
+        }
 
         let mission;
 
@@ -987,9 +989,7 @@ let stopTask;
 
     // missionSettle
     client.on('missionSettle', data => {
-        let message = '';
-
-        let fanOrder = Number(data.fanOrder)
+        let fanOrder = Number(data.fanOrder);
 
         for (const item of data.list) {
             const userId = item[0];
@@ -997,6 +997,8 @@ let stopTask;
             const count = item[2];
             const isFanClub = item[3];
             const isTopFan = item[4];
+
+            log.warn('[후원]', `\x1b[1m${userNick}(${userId})님 미션 정산으로 별풍선 ${count}개를 받았습니다.\x1b[0m`);
 
             if (isFanClub === 1) {
                 log.info('\x1b[38;2;117;170;92m\x1b[1m[팬클럽]', `${userNick}(${userId})님이 ${fanOrder}번째 팬클럽이 되셨습니다.\x1b[0m`);
@@ -1014,7 +1016,7 @@ let stopTask;
 
     // subCeremony
     client.on('subCeremony', data => {
-        log.warn('[구독]', `\x1b[1m${data.userId}(${data.userNick})님이 ${data.month}개월 구독중입니다.\x1b[0m`);
+        log.warn('[구독]', `\x1b[1m${data.userNick}(${data.userId})님이 ${data.month}개월 구독중입니다.\x1b[0m`);
     });
 
     // subtitle
@@ -1043,7 +1045,7 @@ let stopTask;
             return;
         }
 
-        log.warn('[세션]', 
+        log.warn('[세션]',
             `방송 세션이 변경되어 재연결합니다.\n`
             + `제목: ${data.before?.TITLE} → ${data.after?.TITLE}\n`
             + `BNO: ${data.before?.BNO} → ${data.after?.BNO}\n`
@@ -1085,45 +1087,19 @@ let stopTask;
         });
     });
 
+    client.on('macro', data => {
+        log.info('[매크로]', data.type === 'send' ? '전송 완료' : data.message);
+    });
+
+    macro = new SoopMacro(client, {
+        file: process.env.MACROS || 'macros.json',
+        weflab: () => getConfig('weflab')
+    });
+
     // 기존 쿠키가 없으면 비로그인 상태로 먼저 접속
     await client.connect();
 
-    // 비로그인 접속 후 브라우저 로그인
-    if (!client.cookie && browser) {
-        try {
-            const { getSoopCookie } = await import(
-                '#soop/browser'
-            );
-
-            const cookie = await getSoopCookie({
-                browserType: process.env.BROWSER_TYPE || 'chromium',
-                proxy: client.network.proxy,
-                userAgent: process.env.USER_AGENT || undefined
-            });
-
-            const info = await http.getPrivateInfo({
-                ...client.network.httpOptions,
-                cookie
-            });
-
-            if (Number(info?.IS_LOGIN) !== 1) {
-                throw new Error(
-                    '브라우저 로그인 상태를 확인하지 못했습니다.'
-                );
-            }
-
-            client.cookie = cookie;
-            client.disconnect(false);
-
-            await client.connect();
-
-            log.info('[로그인]', '브라우저 로그인이 완료되었습니다.');
-        } catch (error) {
-            log.error('[로그인]', error);
-        }
-    }
-
-    // 브라우저 로그인이 없거나 실패하면 기존 계정 로그인
+    // 기존 계정 로그인
     if (!client.cookie && getConfig('userId')) {
         const result = await client.login(
             getConfig('userId'),
@@ -1153,6 +1129,7 @@ function shutdown() {
         let code = 0;
 
         try {
+            await macro?.close();
             await client?.connecting?.catch(() => {});
             await client?.destroy();
         } catch {
@@ -1254,25 +1231,105 @@ function showChat(data = {}) {
     return false;
 }
 
-async function command(cmd) {
+function testDonation(name, count) {
+    const events = {
+        balloon: ['별풍선', 'balloon'],
+        adcon: ['애드벌룬', 'adcon'],
+        videoBalloon: ['영상풍선', 'videoBalloon'],
+        vodBalloon: ['VOD별풍선', 'vodBalloon'],
+        vodAdcon: ['VOD애드벌룬', 'vodAdcon'],
+        stationAdcon: ['방송국애드벌룬', 'stationAdcon'],
+        sticker: ['스티커', 'sticker'],
+        quickview: ['퀵뷰', 'quickview'],
+        subscription: ['구독권', 'subscription'],
+        follow: ['구독', 'follow'],
+        subCeremony: ['구독갱신', 'subCeremony'],
+        ogqGift: ['OGQ선물', 'ogqGift'],
+        challengeGift: ['도전후원', 'challenge', { type: 'CHALLENGE_GIFT' }],
+        challengeSettle: ['도전정산', 'challenge', { type: 'CHALLENGE_SETTLE' }],
+        battleGift: ['대결후원', 'battle', { type: 'GIFT' }],
+        battleSettle: ['대결정산', 'battle', { type: 'SETTLE' }],
+        missionSettle: ['미션정산', 'missionSettle'],
+        fanClub: ['팬클럽', 'balloon', { fanOrder: count }],
+        topFan: ['열혈팬', 'balloon', { topFan: 1 }]
+    };
+    const entry = Object.entries(events).find(([key, value]) => {
+        return key.toLowerCase() === name?.toLowerCase()
+            || value[0].toLowerCase() === name?.toLowerCase();
+    });
 
-    const [name, ...args] = cmd.trim().split(' ');
-    const text = args.join(' ');
+    if (!entry) {
+        log.warn('[명령어]', '사용법: /테스트 종류 [개수]', '\n' + Object.values(events).map(value => value[0]).join(' / '));
+
+        return;
+    }
+
+    const [, [label, event, options]] = entry;
+    const data = {
+        test: true,
+        userId: 'test', userNick: '테스트유저',
+        fromId: 'test', fromNick: '테스트유저',
+        toId: 'test-fan', toNick: '테스트팬',
+        user_id: 'test', user_nick: '테스트유저',
+        receivedId: 'test-fan', receivedName: '테스트팬',
+        count, month: count, gift_count: count, settle_count: count,
+        tier: 1, tierName: '베이직', title: '테스트 후원',
+        fanOrder: 0, topFan: 0, supporterOrder: 0,
+        item: event === 'quickview'
+            ? { name: '퀵뷰', days: count, plus: false }
+            : { tierName: '베이직', month: count },
+        list: [['test', '테스트유저', count, 0, 0]],
+        raw: [],
+        ...options
+    };
+
+    log.info('[테스트]', `${label} ${count}`);
+    client.emit(event, data);
+}
+
+async function sendCommand(label, request, message) {
+    const result = await request;
+
+    if (result !== true) {
+        const reason = client.idle
+            ? '접속 유지 모드에서는 사용할 수 없습니다.'
+            : !client.isOpen()
+                ? '방송에 연결되어 있지 않습니다.' : '요청 전송 실패';
+
+        log.warn(label, reason);
+
+        return false;
+    }
+
+    log.info(label, message);
+
+    return true;
+}
+
+async function command(cmd) {
+    const input = cmd.trim();
+    const [name, ...args] = input.split(/\s+/);
+    const text = input.slice(name.length).trim();
 
     try {
-        switch (name) {
-        case '/목록': {
-            const result = await control.requestMulti('status');
+        if (name.startsWith('!')) {
+            const result = await macro.handle({
+                message: input,
+                userId: client.userId,
+                userNick: client.info?.LOGIN_NICK || client.userId,
+                source: 'console'
+            }, 'console');
 
-            log.table(Object.fromEntries(
-                result.map(({ id, ...data }) => [
-                    id, data
-                ])
-            ));
+            if (!result) {
+                log.warn('[매크로]', '미실행: 설정, 권한, 대기 시간을 확인하세요.');
+            }
 
-            break;
+            prompt();
+
+            return;
         }
 
+        switch (name) {
         case '/내정보':
         case '/myinfo': {
             const i = await http.getPrivateInfo({
@@ -1280,7 +1337,27 @@ async function command(cmd) {
                 cookie: client.cookie
             });
 
-            log.info(i);
+            if (!i) {
+                log.warn('[내정보]', '계정 정보를 불러오지 못했습니다.');
+                break;
+            }
+
+            const info = {
+                로그인: Number(i.IS_LOGIN) === 1 ? '로그인' : '비로그인',
+                아이디: i.LOGIN_ID || '',
+                닉네임: i.LOGIN_NICK || '',
+                이메일: i.LOGIN_EMAIL || '',
+                '방송국 번호': i.STATION_NO || '',
+                '새 쪽지': Number(i.NOTE_NEW) > 0 ? '있음' : '없음',
+                국가: i.COUNTRY_CODE || i.NATION_CODE || ''
+            };
+
+            log.info('[내정보]');
+            log.table(Object.fromEntries(
+                Object.entries(info).map(([name, value], index) => [
+                    index + 1, { 항목: name, 내용: value }
+                ])
+            ));
             break;
         }
 
@@ -1289,16 +1366,16 @@ async function command(cmd) {
             const targetId = args[0];
 
             if (!targetId) {
-                log.warn('[명령어]', '/조회 아이디');
+                log.warn('[명령어]', '사용법: /조회 아이디');
                 break;
             }
 
             const info = await http.getStation(targetId, client.network.httpOptions);
 
             if (!info) {
-                log.warn('[조회]', `${targetId}은 검색 결과가 없습니다.`);
+                log.warn('[조회]', `${targetId}: 사용자를 찾을 수 없습니다.`);
 
-                return false;
+                break;
             }
 
             const result = await http.getSection(
@@ -1311,33 +1388,11 @@ async function command(cmd) {
             );
 
             if (result) {
-                log.warn('[조회]', `${info?.station.user_nick}님은 현재 방송 중입니다.`);
+                log.info('[조회]', `${info.station?.user_nick || targetId}(${targetId}): 방송 중`);
             } else {
-                log.info('[조회]', `${info?.station.user_nick}님은 현재 오프라인입니다.`);
+                log.info('[조회]', `${info.station?.user_nick || targetId}(${targetId}): 오프라인`);
             }
 
-            break;
-        }
-
-        case '/자동':
-        case '/auto': {
-            const arg = args.join(' ');
-
-            if (arg !== 'true' && arg !== 'false') {
-                log.warn('[명령어]', '/자동 true 또는 false');
-                break;
-            }
-
-            const value = arg === 'true';
-
-            if (client.auto === value) {
-                log.warn('[자동]', `이미 ${client.auto} 으로 되어있습니다.`);
-                break;
-            }
-
-            client.auto = value;
-
-            log.load('[자동]', `자동이 ${client.auto} 으로 설정되었습니다.`);
             break;
         }
 
@@ -1347,14 +1402,14 @@ async function command(cmd) {
             const password = args[1] || '';
 
             if (!targetId) {
-                log.warn('[명령어]', '/접속 방송스트리머아이디 방송비밀번호');
+                log.warn('[명령어]', '사용법: /연결 아이디 [방송 비밀번호]');
                 break;
             }
 
             const info = await http.getStation(targetId, client.network.httpOptions);
 
             if (!info) {
-                log.warn('[연결]', `${targetId}은 검색 결과가 없습니다.`);
+                log.warn('[연결]', `${targetId}: 사용자를 찾을 수 없습니다.`);
                 break;
             }
 
@@ -1370,13 +1425,13 @@ async function command(cmd) {
             const password = args.join(' ');
 
             if (!password) {
-                log.warn('[명령어]', '/비밀번호 방송비밀번호');
+                log.warn('[명령어]', '사용법: /비밀번호 [방송 비밀번호]');
                 break;
             }
 
             client.broadPw = password;
 
-            log.load('[비밀번호]', '방송비밀번호 입력이 완료되었습니다.');
+            log.load('[비밀번호]', '방송 비밀번호 설정 완료');
 
             await client.disconnect(false);
             await client.connect();
@@ -1389,6 +1444,40 @@ async function command(cmd) {
             break;
         }
 
+        case '/자동':
+        case '/auto': {
+            const arg = args.join(' ');
+
+            if (arg !== 'true' && arg !== 'false') {
+                log.warn('[명령어]', '사용법: /자동 값', '\ntrue: 켜기\nfalse: 끄기');
+                break;
+            }
+
+            const value = arg === 'true';
+
+            if (client.auto === value) {
+                log.warn('[자동]', `방송 대기: ${value ? '켜짐' : '꺼짐'} (현재 설정)`);
+                break;
+            }
+
+            client.auto = value;
+
+            log.load('[자동]', `방송 대기: ${value ? '켜짐' : '꺼짐'}`);
+            break;
+        }
+
+        case '/목록': {
+            const result = await control.requestMulti('status');
+
+            log.table(Object.fromEntries(
+                result.map(({ id, ...data }) => [
+                    id, data
+                ])
+            ));
+
+            break;
+        }
+
         case '/로그인':
         case '/login': {
             const id = args[0];
@@ -1396,12 +1485,12 @@ async function command(cmd) {
             const secondPw = args[2];
 
             if (client.cookie) {
-                log.warn('[로그인]', '이미 로그인 상태 입니다.');
+                log.warn('[로그인]', '이미 로그인되어 있습니다.');
                 break;
             }
 
             if (!id || !password) {
-                log.warn('[명령어]', '/로그인 아이디 비밀번호 +2차비밀번호');
+                log.warn('[명령어]', '사용법: /로그인 아이디 비밀번호 [2차 비밀번호]');
                 break;
             }
 
@@ -1412,27 +1501,24 @@ async function command(cmd) {
             );
 
             if (result === -1) {
-                log.error('[로그인]', '등록되지 않은 아이디이거나,', 
-                    '아이디 또는 비밀번호를 잘못 입력하셨습니다.'
-                );
+                log.error('[로그인]', '아이디/비밀번호 오류');
                 break;
             }
 
             if (result === -2) {
-                log.error('[로그인]', '2차 비밀번호를 잘못 입력하셨습니다.');
+                log.error('[로그인]', '2차 비밀번호 오류');
                 break;
             }
 
             if (result !== 1) {
-                log.error('[로그인]', '로그인 요청을 완료하지 못했습니다.');
+                log.error('[로그인]', '로그인 실패');
                 break;
             }
 
             const info = await http.getStation(id);
 
-            log.info('[로그인]', 
-                `${info?.station.user_nick}(${info?.station.user_id}) `
-                + '로그인 되었습니다.'
+            log.info('[로그인]',
+                `${info?.station?.user_nick || id}(${id}): 로그인 완료`
             );
 
             const re = client.closeWs();
@@ -1441,41 +1527,247 @@ async function command(cmd) {
                 await client.connectWs();
             }
 
-            break
+            break;
         }
 
         case '/로그아웃':
         case '/logout': {
             const result = await client.logout();
-            
+
             if (!result) {
-                log.warn('[로그아웃]', '이미 비로그인 상태입니다.');
+                log.warn('[로그아웃]', '로그인되어 있지 않습니다.');
                 break;
             }
 
-            log.info('[로그아웃]', '로그아웃 되었습니다.');
+            log.info('[로그아웃]', '로그아웃 완료');
             break;
         }
 
-        case '/모드':
-        case '/mode': {
-            const value = Number(args[0]);
+        case '/닉네임':
+        case '/nickname': {
+            const nickname = text.trim();
 
-            if (![0, 1, 2, 3].includes(value)) {
-                log.warn('[명령어]', '/모드 번호');
+            await sendCommand(
+                '[닉네임]',
+                client.sendNickName(nickname),
+                nickname ? `닉네임 변경 요청: ${nickname}` : '닉네임 변경 요청 완료'
+            );
+            break;
+        }
+
+        case '/채팅':
+        case '/chat':
+            if (!text) {
+                log.warn('[명령어]', '사용법: /채팅 내용');
                 break;
             }
 
-            mode = value;
+            await sendCommand('[채팅]', client.sendChat(text), '채팅 전송 요청 완료');
+            break;
 
-            const name = {
-                0: '전체 채팅',
-                1: '열혈 이상',
-                2: '매니저 이상',
-                3: '스트리머'
-            }[mode];
+        case '/매니저':
+        case '/manager':
+            if (!text) {
+                log.warn('[명령어]', '사용법: /매니저 내용');
+                break;
+            }
 
-            log.info('[모드]', `${name}만 표시합니다.`);
+            await sendCommand('[매니저]', client.sendManagerChat(text), '매니저 채팅 전송 요청 완료');
+            break;
+
+        case '/귓속말':
+        case '/to': {
+            const targetId = args[0];
+            const message = args.slice(1).join(' ');
+
+            if (!targetId || !message) {
+                log.warn('[명령어]', '사용법: /귓속말 아이디 내용');
+                break;
+            }
+
+            await sendCommand('[귓속말]', client.sendDirectChat(message, targetId), `귓속말 전송 요청: ${targetId}`);
+            break;
+        }
+
+        case '/답장':
+        case '/re': {
+            const message = args.join(' ');
+
+            if (!client.direct) {
+                log.warn('[답장]', '받은 귓속말이 없습니다.');
+                break;
+            }
+
+            if (!message) {
+                log.warn('[명령어]', '사용법: /답장 내용');
+                break;
+            }
+
+            await sendCommand('[답장]', client.sendDirectChat(message, client.direct), `귓속말 답장 요청: ${client.direct}`);
+            break;
+        }
+
+        case '/이모티콘':
+        case '/ogq': {
+            const ogqId = args[0];
+            const subId = args[1] === undefined ? 1 : Number(args[1]);
+            const message = args.slice(2).join(' ');
+
+            const list = client.ogq?.data?.map((item, index) => (
+                `${index}. ${item.ogq_title}`
+            ));
+
+            if (!list?.length) {
+                log.warn('[OGQ]', 'OGQ 목록이 없습니다.');
+                break;
+            }
+
+            if (!ogqId) {
+                log.warn('[명령어]', '사용법: /이모티콘 OGQ [번호] [내용]', '\n' + list.join('\n'));
+                break;
+            }
+
+            const ogq = client.findOgq(ogqId);
+
+            if (!ogq) {
+                log.warn('[OGQ]', 'OGQ를 찾을 수 없습니다.');
+                break;
+            }
+
+            if (!Number.isSafeInteger(subId) || subId < 1 || subId > ogq.max) {
+                log.warn('[OGQ]', `이모티콘 번호: 1 ~ ${ogq.max}`);
+                break;
+            }
+
+            const result = await client.sendOgq(message, ogq.id, subId);
+
+            if (result?.code !== 1) {
+                log.warn('[OGQ]', 'OGQ 전송 실패', result?.message || '');
+                break;
+            }
+
+            log.load('[OGQ]', `${ogqId}: 이모티콘 ${subId}번 전송 완료`);
+            break;
+        }
+
+        case '/위임':
+        case '/op': {
+            const targetId = args[0];
+
+            if (!targetId) {
+                log.warn('[명령어]', '사용법: /위임 아이디');
+                break;
+            }
+
+            await sendCommand('[위임]', client.sendSubBj(targetId, 1), `매니저 지정 요청: ${targetId}`);
+            break;
+        }
+
+        case '/해임':
+        case '/-op': {
+            const targetId = args[0];
+
+            if (!targetId) {
+                log.warn('[명령어]', '사용법: /해임 아이디');
+                break;
+            }
+
+            await sendCommand('[해임]', client.sendSubBj(targetId, 0), `매니저 해제 요청: ${targetId}`);
+            break;
+        }
+
+        case '/채금':
+        case '/m': {
+            const targetId = args[0];
+            const message = args.slice(1).join(' ') || '채팅금지';
+
+            if (!targetId) {
+                log.warn('[명령어]', '사용법: /채금 아이디 [사유]');
+                break;
+            }
+
+            await sendCommand('[채금]', client.sendDumb(targetId, message), `채팅금지 요청: ${targetId}`);
+            break;
+        }
+
+        case '/강퇴':
+        case '/k': {
+            const targetId = args[0];
+            const message = args.slice(1).join(' ') || '강제퇴장';
+
+            if (!targetId) {
+                log.warn('[명령어]', '사용법: /강퇴 아이디 [사유]');
+                break;
+            }
+
+            await sendCommand('[강퇴]', client.sendKick(targetId, 0, message), `강퇴 요청: ${targetId}`);
+            break;
+        }
+
+        case '/강퇴취소':
+        case '/-k': {
+            const targetId = args[0];
+
+            if (!targetId) {
+                log.warn('[명령어]', '사용법: /강퇴취소 아이디');
+                break;
+            }
+
+            await sendCommand('[강퇴취소]', client.sendKick(targetId, 1), `강퇴 취소 요청: ${targetId}`);
+            break;
+        }
+
+        case '/강퇴인원':
+        case '/kicklist':
+            await sendCommand('[강퇴인원]', client.sendKickList(), '강퇴 목록 요청 완료');
+            break;
+
+        case '/얼음':
+        case '/ice': {
+            if (client.iceMode) {
+                log.warn('[얼음]', '이미 채팅이 얼어 있습니다.');
+                break;
+            }
+
+            const result = await client.sendIceMode('ice_on', 100001);
+
+            if (!result) {
+                log.warn('[얼음]', '채팅 얼리기 요청 실패');
+                break;
+            }
+
+            log.info('[얼음]', '채팅 얼리기 처리 결과', result);
+            break;
+        }
+
+        case '/땡':
+        case '/-ice': {
+            if (!client.iceMode) {
+                log.warn('[땡]', '채팅이 얼어 있지 않습니다.');
+                break;
+            }
+
+            const result = await client.sendIceMode('ice_off', 0);
+
+            if (!result) {
+                log.warn('[땡]', '채팅 녹이기 요청 실패');
+                break;
+            }
+
+            log.info('[땡]', '채팅 녹이기 처리 결과', result);
+            break;
+        }
+
+        case '/저속':
+        case '/slow': {
+            const count = args[0] === undefined ? 0 : Number(args[0]);
+
+            if (!Number.isSafeInteger(count) || count < 0) {
+                log.warn('[명령어]', '사용법: /저속 초');
+                break;
+            }
+
+            await sendCommand('[저속]', client.sendSlowMode(count), `채팅 입력 간격 요청: ${count}초`);
             break;
         }
 
@@ -1487,7 +1779,7 @@ async function command(cmd) {
             if (!user) {
                 log.warn(
                     '[룰렛]',
-                    'config.json에 weflab을 설정해주세요.'
+                    '.env의 WEFLAB을 설정해주세요.'
                 );
                 break;
             }
@@ -1498,151 +1790,27 @@ async function command(cmd) {
             ) {
                 log.warn(
                     '[명령어]',
-                    '/룰렛 후원개수'
+                    '사용법: /룰렛 개수'
                 );
                 break;
             }
 
+            const rule = macro.rules.find(rule =>
+                rule.action === 'roulette'
+                && rule.enabled !== false
+                && macro.matchesRoulette(rule, String(count))
+            );
+            const index = typeof rule?.index === 'object'
+                ? rule.index[count] ?? 0
+                : rule?.index ?? 0;
             const result = await weflab.roulette(
                 user,
-                count
+                count,
+                index
             );
 
-            const items = [...result.items]
-                .sort(
-                    (a, b) =>
-                        b.rate - a.rate
-                )
-                .map(
-                    item =>
-                        `${item.name} ${item.rate}%`
-                )
-                .join('\n');
+            log.load(weflab.format(result, count, rule?.numbers, rule?.title));
 
-            log.load(
-                `룰렛 ${count}\n${items}`
-            );
-
-            break;
-        }
-        
-        case '/채팅':
-        case '/chat':
-            await client.sendChat(text);
-            break;
-
-        case '/매니저':
-        case '/manager':
-            await client.sendManagerChat(text);
-            break;
-        
-        case '/위임':
-        case '/op': {
-            const targetId = args[0];
-
-            if (!targetId) {
-                log.warn('[명령어]', '/위임 아이디');
-                break;
-            }
-
-            await client.sendSubBj(targetId, 1);
-            break;
-        }
-        
-        case '/해임':
-        case '/-op': {
-            const targetId = args[0];
-
-            if (!targetId) {
-                log.warn('[명령어]', '/해임 아이디');
-                break;
-            }
-
-            await client.sendSubBj(targetId, 0);
-            break;
-        }
-
-        case '/얼음':
-        case '/ice': {
-            if (client.iceMode) {
-                log.warn('[얼음]', '이미 얼음 기능이 활성화되어 있습니다.');
-                break;
-            }
-
-            const mask = client.makeIceAuth({
-                streamer: true,
-                fanClub: false,
-                supporter: false,
-                topFan: false,
-                subscriber: false,
-                manager: true,
-            });
-
-            const result = await client.sendIceMode('ice_on', 100001);
-            log.debug(result);
-            break;
-        }
-
-        case '/땡':
-        case '/-ice': {
-            if (!client.iceMode) {
-                log.debug('[땡]', '현재 얼음 기능이 활성화되어 있지 않습니다.');
-                break;
-            }
-
-            const result = await client.sendIceMode('ice_off', 0);
-            log.debug(result);
-            break;
-        }
-        
-        case '/귓속말':
-        case '/to': {
-            const targetId = args[0];
-            const message = args.slice(1).join(' ');
-
-            if (!targetId || !message) {
-                log.warn('[명령어]', '/귓속말 아이디 내용');
-                break;
-            }
-
-            await client.sendDirectChat(message, targetId);
-            break;
-        }
-
-        case '/답장':
-        case '/re': {
-            const message = args.join(' ');
-
-            if (!client.direct) {
-                log.warn('[답장]', '답장할 대상이 없습니다.');
-                break;
-            }
-
-            if (!message) {
-                log.warn('[명령어]', '/답장 내용');
-                break;
-            }
-
-            await client.sendDirectChat(message, client.direct);
-            break;
-        }
-
-        case '/투표':
-        case '/poll': {
-            const index = Number(args[0]);
-
-            if (!client.poll) {
-                log.warn('[투표]', '현재 진행 중인 투표가 없습니다.');
-                break;
-            }
-
-            if (Number.isNaN(index)) {
-                log.warn('[명령어]', '/투표 번호');
-                break;
-            }
-
-            const result = await client.sendPoll(index);
-            log.debug(result);
             break;
         }
 
@@ -1650,20 +1818,20 @@ async function command(cmd) {
         case '/challenge': {
             const challenge = await client.sendChallengeList();
 
-            if (!challenge.ok) {
-                log.warn('[도전미션]', challenge?.message);
+            if (!challenge?.ok) {
+                log.warn('[도전미션]', challenge?.message || '목록 조회 실패');
                 break;
             }
 
             if (!challenge.list.length) {
-                log.warn('[도전미션]', '진행중인 도전미션이 없습니다.');
+                log.warn('[도전미션]', '진행 중인 도전미션이 없습니다.');
                 break;
             }
 
             const text = challenge.list.map(item => {
                 const status = {
                     REQUEST: '요청',
-                    PROGRESS: '진행중',
+                    PROGRESS: '진행 중',
                     SUCCESS: '성공',
                     FAIL: '실패',
                     CANCEL: '취소'
@@ -1671,7 +1839,7 @@ async function command(cmd) {
 
                 const lines = [
                     `[도전미션] ${item.title}`,
-                    `상태: ${status[item.status]}`,
+                    `상태: ${status[item.status] || item.status}`,
                     `등록자: ${item.userNick}(${item.userId})`
                 ];
 
@@ -1707,8 +1875,8 @@ async function command(cmd) {
         case '/battle': {
             const mission = await client.sendMissionList();
 
-            if (!mission.ok) {
-                log.warn('[대결미션]', mission?.message);
+            if (!mission?.ok) {
+                log.warn('[대결미션]', mission?.message || '목록 조회 실패');
                 break;
             }
 
@@ -1721,24 +1889,69 @@ async function command(cmd) {
             break;
         }
 
-        case '/자막':
-        case '/subtitle': {
+        case '/투표':
+        case '/poll': {
             const index = Number(args[0]);
 
-            if (Number.isNaN(index)) {
-                log.warn('[명령어]', '/자막 ', 
-                    '-1: 끄기 / 0: 한국어 / 1: English'
-                );
+            if (!client.poll) {
+                log.warn('[투표]', '진행 중인 투표가 없습니다.');
                 break;
             }
 
-            await client.sendSubtitle(index);
+            if (!Number.isSafeInteger(index) || index < 1) {
+                log.warn('[명령어]', '사용법: /투표 번호');
+                break;
+            }
+
+            const result = await client.sendPoll(index);
+
+            if (!result) {
+                log.warn('[투표]', '투표 요청 실패');
+                break;
+            }
+
+            log.info('[투표]', '투표 처리 결과', result);
+            break;
+        }
+
+        case '/매크로': {
+            if (args[0] === 'true' || args[0] === 'false') {
+                macro.setEnabled(args[0] === 'true');
+            }
+            else if (args[0] === '새로고침') {
+                macro.load();
+            }
+            else if (args.length) {
+                log.warn('[명령어]', '사용법: /매크로 [설정]', '\ntrue: 켜기\nfalse: 끄기\n새로고침: 설정 불러오기');
+                break;
+            }
+
+            log.info('[매크로]', macro.config.enabled ? '켜짐' : '꺼짐');
+            log.table(Object.fromEntries(macro.list().map((rule, index) => [
+                index + 1, rule
+            ])));
+            break;
+        }
+
+        case '/테스트':
+        case '/test': {
+            const count = args[1] === undefined ? 100 : Number(args[1]);
+
+            if (args.length > 2 || !Number.isSafeInteger(count) || count < 1) {
+                log.warn('[명령어]', '사용법: /테스트 종류 [개수]');
+                break;
+            }
+
+            testDonation(args[0], count);
             break;
         }
 
         case '/참여인원':
         case '/userlist': {
-            await client.sendUserList();
+            if (!await client.sendUserList()) {
+                log.warn('[참여인원]', '참여자 목록 요청 실패');
+                break;
+            }
 
             if (!isList) {
                 const list = [...client.userList.values()]
@@ -1747,114 +1960,60 @@ async function command(cmd) {
                     }
                 ).join('\n');
 
-                log.info(`[참여인원]\n${list}`);
+                log.info('[참여인원]', list ? '\n' + list : '참여자가 없습니다.');
             }
 
             break;
         }
 
-        case '/강퇴인원':
-        case '/kicklist':
-            await client.sendKickList();
-            break;
+        case '/자막':
+        case '/subtitle': {
+            const index = Number(args[0]);
 
-        case '/저속':
-        case '/slow': {
-            const count = Number(args[0]) || 0;
-            await client.sendSlowMode(count);
-            break;
-        }
-
-        case '/채금':
-        case '/m': {
-            const targetId = args[0];
-            const message = args.slice(1).join(' ') || '채팅금지';
-
-            if (!targetId) {
-                log.warn('[명령어]', '/채금 아이디 사유');
+            if (![-1, 0, 1].includes(index)) {
+                log.warn('[명령어]', '사용법: /자막 번호',
+                    '\n-1: 끄기\n0: 한국어\n1: 영어'
+                );
                 break;
             }
 
-            await client.sendDumb(targetId, message);
+            await sendCommand('[자막]', client.sendSubtitle(index), `자막 변경 요청: ${{ [-1]: '끄기', 0: '한국어', 1: '영어' }[index]}`);
             break;
         }
 
-        case '/강퇴':
-        case '/k': {
-            const targetId = args[0];
-            const message = args.slice(1).join(' ') || '강제퇴장';
-
-            if (!targetId) {
-                log.warn('[명령어]', '/강퇴 아이디 사유');
-                break;
-            }
-
-            await client.sendKick(targetId, 0, message);
-            break;
-        }
-
-        case '/강퇴취소':
-        case '/-k': {
-            const targetId = args[0];
-
-            if (!targetId) {
-                log.warn('[명령어]', '/강퇴취소 아이디');
-                break;
-            }
-
-            await client.sendKick(targetId, 1);
-            break;
-        }
-
-        case '/번역': 
+        case '/번역':
         case '/t': {
-            const mode = Number(args[0]) || 1;
+            const mode = Number(args[0]);
             const message = args.slice(1).join(' ');
 
-            if (!message) {
-                log.warn('[명령어]', '/번역 1 내용');
+            if (!Number.isSafeInteger(mode) || mode < 1 || !message) {
+                log.warn('[명령어]', '사용법: /번역 모드 내용');
                 break;
             }
 
-            await client.sendTranslation(message, mode);
+            await sendCommand('[번역]', client.sendTranslation(message, mode), `번역 전송 요청: 모드 ${mode}`);
             break;
         }
 
-        case '/이모티콘':
-        case '/ogq': {
-            const ogqId = args[0];
-            const subId = Number(args[1]) || 1;
-            const message = args.slice(2).join(' ');
+        case '/모드':
+        case '/mode': {
+            const value = Number(args[0]);
 
-            const list = client.ogq?.data.map((item, index) => (
-                `${index}. ${item.ogq_title}`
-            ));
-
-            if (!list?.length) {
-                log.warn('[OGQ]', 'OGQ 목록이 없습니다.');
+            if (![0, 1, 2, 3].includes(value)) {
+                log.warn('[명령어]', '사용법: /모드 번호', '\n0: 전체\n1: 열혈 이상\n2: 매니저 이상\n3: 스트리머');
                 break;
             }
 
-            if (!ogqId) {
-                log.warn('[명령어]', '/ogq ogqId 번호 +내용', list);
-                break;
-            }
+            mode = value;
 
-            const ogq = client.findOgq(ogqId);
+            const name = {
+                0: '전체 채팅',
+                1: '열혈 이상',
+                2: '매니저 이상',
+                3: '스트리머'
+            }[mode];
 
-            if (!ogq) {
-                log.warn('[OGQ]', '없는 OGQ 번호입니다.');
-                break;
-            }
-
-            const result = await client.sendOgq(message, ogq.id, subId);
-
-            if (result.code !== 1) {
-                log.warn('[OGQ]', 'OGQ 전송 실패', result.message);
-                break;
-            }
-
-            log.load('[OGQ]', list[ogqId]);
+            log.info('[모드]', `채팅 표시: ${name}`);
             break;
         }
 
@@ -1863,59 +2022,65 @@ async function command(cmd) {
             console.clear();
             break;
 
+        case '/도움':
+        case '/help':
+            log.table(Object.fromEntries([
+                ['/내정보', '', '내정보 확인'],
+                ['/조회', '아이디', '방송 상태 확인'],
+                ['/연결', '아이디\n방송 비밀번호', '방송 채팅 연결'],
+                ['/비밀번호', '방송 비밀번호', '방송 비밀번호 입력'],
+                ['/연결해제', '', '현재 연결 해제'],
+                ['/자동', 'true\nfalse', '방송 대기 설정'],
+                ['/목록', '', '연결 상태 확인'],
+                ['/로그인', '아이디\n비밀번호\n2차 비밀번호', '로그인'],
+                ['/로그아웃', '', '로그아웃'],
+                ['/닉네임', '[이름]', '임시 닉네임 변경'],
+                ['/채팅', '내용', '일반 채팅 전송'],
+                ['/매니저', '내용', '매니저 채팅 전송'],
+                ['/귓속말', '아이디\n내용', '귓속말 전송'],
+                ['/답장', '내용', '귓속말 답장'],
+                ['/이모티콘', 'OGQ\n번호\n내용', 'OGQ 전송'],
+                ['/위임', '아이디', '매니저 지정'],
+                ['/해임', '아이디', '매니저 해제'],
+                ['/채금', '아이디\n사유', '채팅금지'],
+                ['/강퇴', '아이디\n사유', '강퇴'],
+                ['/강퇴취소', '아이디', '강퇴 취소'],
+                ['/강퇴인원', '', '강퇴 목록 요청'],
+                ['/얼음', '', '채팅 얼리기'],
+                ['/땡', '', '채팅 녹이기'],
+                ['/저속', '초', '채팅 입력 간격 설정'],
+                ['/룰렛', '개수', 'Weflab 룰렛 확률 조회'],
+                ['/도전', '', '도전미션 조회'],
+                ['/대결', '', '대결미션 조회'],
+                ['/투표', '번호', '투표 참여'],
+                ['/매크로', 'true\nfalse\n새로고침', '매크로 설정'],
+                ['/테스트', '종류\n개수', '후원 알림 테스트'],
+                ['/참여인원', '', '현재 참여자 목록 요청'],
+                ['/자막', '번호', '자막 언어 변경'],
+                ['/번역', '모드\n내용', '채팅 번역'],
+                ['/모드', '번호', '채팅 로그 표시 범위'],
+                ['/지우기', '', '실행창 지우기'],
+                ['/도움', '', '명령어 목록 출력'],
+                ['/종료', '', '연결 종료']
+            ].map(([command, parameters, description], index) => [
+                index + 1, { 명령어: command, 파라미터: parameters, 설명: description }
+            ])));
+            break;
+
         case '/종료':
         case '/exit':
             await shutdown();
 
             return;
-        
-        case '/도움':
-        case '/help':
-            log.prompt('[명령어]\n' + [
-                '/조회 아이디',
-                '/자동 true & false',
-                '/연결 아이디 방송비밀번호',
-                '/비밀번호 방송비밀번호',
-                '/연결해제',
-                '/목록',
-                '/로그인 아이디 비밀번호 +2차비밀번호',
-                '/로그아웃',
-
-                '/위임 아이디',
-                '/해임 아이디',
-                '/채금 아이디 사유',
-                '/강퇴 아이디 사유',
-                '/강퇴취소 아이디',
-                '/얼음',
-                '/땡',
-                '/저속 초',
-
-                '/채팅 내용',
-                '/매니저 내용',
-                '/이모티콘 OGQ 번호 내용',
-                '/귓속말 아이디 내용',
-                '/답장 내용',
-
-                '/투표 번호',
-                '/대결',
-                '/자막 번호',
-                '/참여인원',
-                '/강퇴인원',
-                '/번역 모드 내용',
-                '/모드 번호',
-                '/지우기',
-                '/종료'
-            ].join('\n'));
-            break;        
 
         default:
-            log.warn('[명령어]', '알 수 없는 명령어입니다.', 
-                '/도움 입력으로 명령어 목록을 확인하세요.'
+            log.warn('[명령어]', '알 수 없는 명령어입니다.',
+                '/도움으로 사용법을 확인하세요.'
             );
             break;
         }
     } catch (error) {
-        log.error('[명령어]', error.message);
+        log.error('[명령어]', `${name}: ${error.message || '명령 실행 실패'}`);
     }
 
     prompt();
@@ -1923,7 +2088,10 @@ async function command(cmd) {
 
 rl.on('line', async (input) => {
     const cmd = input.trim();
-    log.input(input);
+    const name = cmd.split(/\s+/)[0];
+    const hidden = ['/로그인', '/login', '/비밀번호', '/password', '/연결', '/connect'].includes(name);
+
+    log.input(hidden ? `${name} [숨김]` : input);
 
     if (!cmd) {
         prompt();
@@ -1935,3 +2103,4 @@ rl.on('line', async (input) => {
 });
 
 rl.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

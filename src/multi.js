@@ -41,7 +41,7 @@ function shutdown() {
 
 async function status({ action }) {
     if (stopping || action !== 'status') {
-        throw new Error('멀티 명령 오류');
+        throw new Error('명령 오류');
     }
 
     return manager.status();
@@ -55,7 +55,8 @@ async function start() {
 
         const definitions = tenants.loadTenants();
         const options = tenants.tenantOptions(
-            definitions, process.argv[2]
+            definitions,
+            process.argv[2]
         );
 
         server = await control.listenControl(shutdown, status);
@@ -109,7 +110,8 @@ async function start() {
             error.code === 'EADDRINUSE'
             ? '이미 실행 중'
             : error.constructor === Error
-                ? error.message : '실행 오류'
+                ? error.message
+                : '실행 오류'
         );
 
         log.error('[연결]', message);
@@ -126,7 +128,8 @@ async function stop() {
     } catch (error) {
         if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) {
             log.info('[종료]', '실행 중인 연결 없음');
-        } else {
+        }
+        else {
             log.error('[종료]', '종료 실패');
             process.exitCode = 1;
         }
@@ -135,6 +138,7 @@ async function stop() {
 
 if (process.argv[2] === '--stop') {
     await stop();
-} else {
+}
+else {
     await start();
 }

@@ -1,5 +1,7 @@
 export { SoopClient } from './client.js';
 export { SoopManager } from './manager.js';
+export { SoopMacro } from './macro.js';
+export { SoopHistory } from './history.js';
 
 export * as http from './http.js';
 export * as packet from './packet.js';

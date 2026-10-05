@@ -1,6 +1,5 @@
 import { WebSocket } from 'ws';
 import { SoopClient } from '#soop/client';
-import { getSoopCookie } from '#soop/browser';
 import * as http from '#soop/http';
 
 export class SoopManager {
@@ -10,10 +9,15 @@ export class SoopManager {
         retryDelay = 1000,
         reconnectInterval = 10000
     } = {}) {
-        if ((concurrency !== Infinity
-            && (!Number.isSafeInteger(concurrency) || concurrency < 1))
-            || ![retries, retryDelay, reconnectInterval]
-            .every(value => Number.isSafeInteger(value) && value > 0)) {
+        if (
+            (
+                concurrency !== Infinity
+                && (!Number.isSafeInteger(concurrency) || concurrency < 1)
+            )
+            || ![retries, retryDelay, reconnectInterval].every(value =>
+                Number.isSafeInteger(value) && value > 0
+            )
+        ) {
             throw new Error('연결 설정 오류');
         }
 
@@ -28,10 +32,15 @@ export class SoopManager {
 
         this.timer = setInterval(() => {
             for (const [id, entry] of this.clients) {
-                if (entry.wanted && !entry.pending
+                if (
+                    entry.wanted
+                    && !entry.pending
                     && entry.retryAt <= Date.now()
-                    && (!entry.client.isOpen()
-                        || !entry.client.bridge?.isOpen())) {
+                    && (
+                        !entry.client.isOpen()
+                        || !entry.client.bridge?.isOpen()
+                    )
+                ) {
                     void this.connect(id).catch(() => {});
                 }
             }
@@ -45,9 +54,11 @@ export class SoopManager {
             throw new Error('관리자 종료');
         }
 
-        if (!Number.isSafeInteger(id)
+        if (
+            !Number.isSafeInteger(id)
             || id < 1
-            || this.clients.has(id)) {
+            || this.clients.has(id)
+        ) {
             throw new Error('연결 번호 오류');
         }
 
@@ -110,7 +121,8 @@ export class SoopManager {
 
                 if (socket.readyState === WebSocket.CONNECTING) {
                     socket.terminate();
-                } else {
+                }
+                else {
                     socket.close(1000);
                 }
             }
@@ -128,8 +140,11 @@ export class SoopManager {
     }
 
     drain() {
-        while (!this.closed && this.active < this.concurrency
-            && this.tasks.length) {
+        while (
+            !this.closed
+            && this.active < this.concurrency
+            && this.tasks.length
+        ) {
             const task = this.tasks.shift();
 
             if (!task.entry.wanted || task.entry.controller.signal.aborted) {
@@ -161,27 +176,18 @@ export class SoopManager {
                 client.disconnect(false);
 
                 if (!entry.authenticated) {
-                    if (options.browser) {
-                        client.cookie = await getSoopCookie({
-                            browserType: options.browserType || 'chromium',
-                            authFile: options.authFile || `browser-${id}.json`,
-                            proxy: options.proxy,
-                            userAgent: options.userAgent,
-                            signal
-                        });
-                    }
-
-                    else if (!client.cookie && options.userId) {
+                    if (!client.cookie && options.userId) {
                         if (!options.password) {
                             throw new Error('비밀번호 없음');
                         }
 
                         const result = (
                             await client.login(
-                            options.userId,
-                            options.password,
-                            options.secondPw
-                        ));
+                                options.userId,
+                                options.password,
+                                options.secondPw
+                            )
+                        );
 
                         if (result !== 1) {
                             throw new Error('로그인 실패');
@@ -235,7 +241,8 @@ export class SoopManager {
                             resolve();
                         };
 
-                        const timer = setTimeout(done,
+                        const timer = setTimeout(
+                            done,
                             Math.max(0, entry.retryAt - Date.now())
                             + Math.floor(Math.random() * this.retryDelay)
                         );
@@ -313,7 +320,8 @@ export class SoopManager {
             targets.map(async id => {
                 try {
                     const value = (
-                        this.closed ? false
+                        this.closed
+                        ? false
                         : await this[action](id)
                     );
 
@@ -334,11 +342,11 @@ export class SoopManager {
             id,
             connected: entry.client.isOpen(),
             connecting: Boolean(entry.pending),
-            authenticated: (entry.authenticated
+            authenticated: (
+                entry.authenticated
                 && Number(entry.client.info?.IS_LOGIN) === 1
             ),
             idle: entry.client.idle,
-            proxy: Boolean(entry.client.network.proxy),
             error: entry.error
         }));
     }

@@ -38,9 +38,7 @@ function url(user = '') {
     const value = String(user).trim();
 
     if (!value) {
-        throw new Error(
-            'Weflab 사용자가 없습니다.'
-        );
+        throw new Error('Weflab 사용자 없음');
     }
 
     const target = value.startsWith('http')
@@ -54,9 +52,7 @@ function url(user = '') {
         target.hostname !== 'weflab.com'
         || !target.pathname.startsWith('/user/')
     ) {
-        throw new Error(
-            '올바른 Weflab 사용자 주소가 아닙니다.'
-        );
+        throw new Error('Weflab 주소 오류');
     }
 
     return target;
@@ -81,13 +77,37 @@ function parse(html = '') {
     let buffer = '';
 
     const tokens = source.matchAll(
-        /<input\b[^>]*>|[^<]+/gi
+        /<input\b[^>]*>|<[^>]*>|[^<]+/gi
     );
 
     for (const match of tokens) {
         const token = match[0];
 
         if (/^<input\b/i.test(token)) {
+            if (waiting) {
+                const count = buffer.match(
+                    /(\d+)\s*개(?:\s*부터\s*(\d+)\s*개\s*까지)?/
+                );
+
+                if (count) {
+                    group = {
+                        count: Number(count[1]),
+                        ...(count[2] ? {
+                            maxCount: Number(count[2])
+                        } : {}),
+                        items: []
+                    };
+
+                    groups.push(group);
+                } else {
+                    group = null;
+                }
+
+                name = '';
+                waiting = false;
+                buffer = '';
+            }
+
             if (!group) {
                 continue;
             }
@@ -123,6 +143,10 @@ function parse(html = '') {
             continue;
         }
 
+        if (token.startsWith('<')) {
+            continue;
+        }
+
         const text = decode(token)
             .replace(/\s+/g, ' ')
             .trim();
@@ -131,36 +155,20 @@ function parse(html = '') {
             continue;
         }
 
-        buffer = `${buffer} ${text}`
-            .trim()
-            .slice(-100);
-
-        if (buffer.includes('후원 개수')) {
+        if (text.includes('후원 개수')) {
             waiting = true;
+            buffer = '';
+
+            continue;
         }
 
         if (!waiting) {
             continue;
         }
 
-        const count = buffer.match(
-            /(\d+)\s*개/
-        );
-
-        if (!count) {
-            continue;
-        }
-
-        group = {
-            count: Number(count[1]),
-            items: []
-        };
-
-        groups.push(group);
-
-        name = '';
-        waiting = false;
-        buffer = '';
+        buffer = `${buffer} ${text}`
+            .trim()
+            .slice(-100);
     }
 
     return groups.filter(
@@ -179,15 +187,37 @@ export async function list(user) {
     );
 
     if (!response.ok) {
-        throw new Error(
-            `Weflab 요청 실패: `
-            + response.status
-        );
+        throw new Error(`Weflab 요청 실패 (${response.status})`);
     }
 
     return parse(
         await response.text()
     );
+}
+
+export function format(roulette, count, numbers = [], title = '') {
+    const lines = [
+        title
+            ? title.replace(/\{개수\}/g, String(count))
+            : `[/별풍선_s/ ${count} 룰렛]`
+    ];
+    const related = numbers.every(Array.isArray)
+        ? numbers.find(group => group.includes(count))
+        : numbers;
+
+    if (related?.length) {
+        lines.push('* ' + [...new Set(related)].join(', '));
+    }
+
+    lines.push(...[...roulette.items]
+        .sort((a, b) => b.rate - a.rate)
+        .map(item => {
+            const prefix = /^[\p{L}\p{N}]/u.test(item.name.trimStart()) ? '· ' : '';
+
+            return `${prefix}${item.name} ${item.rate}%`;
+        }));
+
+    return lines.join('\n');
 }
 
 export async function roulette(
@@ -201,23 +231,20 @@ export async function roulette(
         !Number.isInteger(value)
         || value < 1
     ) {
-        throw new Error(
-            '후원 개수가 올바르지 않습니다.'
-        );
+        throw new Error('후원 개수 오류');
     }
 
     const groups = (
         await list(user)
     ).filter(
-        item => item.count === value
+        item => value >= item.count
+            && value <= (item.maxCount ?? item.count)
     );
 
     const result = groups[index];
 
     if (!result) {
-        throw new Error(
-            `${value}개 룰렛을 찾지 못했습니다.`
-        );
+        throw new Error(`${value}개 룰렛 없음`);
     }
 
     return result;
