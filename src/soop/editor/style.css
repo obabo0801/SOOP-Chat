@@ -28,6 +28,262 @@ strong {
   letter-spacing: 2px;
 }
 
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.identity strong {
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.portrait {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.emblem {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+button.information {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-family: Georgia, serif;
+  font-weight: bold;
+}
+
+#profile {
+  width: 580px;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  padding: 24px;
+  border: 1px solid #dde5df;
+  border-radius: 16px;
+  color: inherit;
+  background: #fff;
+}
+
+#profile::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  width: 28px;
+  height: 28px;
+}
+
+.close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.menu {
+  position: relative;
+}
+
+#menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 6px;
+}
+
+#menu svg {
+  width: 24px;
+  height: 24px;
+}
+
+#menu-items {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  min-width: 170px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #dde5df;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+#menu-items button,
+#menu-items label {
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  border: 0;
+}
+
+#macros {
+  width: 1200px;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  padding: 24px;
+  border: 1px solid #dde5df;
+  border-radius: 16px;
+  color: inherit;
+  background: #fff;
+}
+
+#macros[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+#macros::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+#macros > .heading {
+  flex-shrink: 0;
+}
+
+#macros main {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+#macros aside,
+#macros section {
+  padding: 16px;
+}
+
+#macro-back {
+  display: none;
+}
+
+#macro-status {
+  margin: 0 0 16px;
+  text-align: center;
+}
+
+#macro-status:empty {
+  display: none;
+}
+
+#macro-status.error {
+  color: #a43b35;
+}
+
+#macro-preview {
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  border: 1px solid #dde5df;
+  border-radius: 12px;
+  background: #fff;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+#macro-preview .chat-ogq {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+#macro-preview .chat-ogq .chat-identity {
+  flex-shrink: 0;
+  margin-right: 0;
+}
+
+#macro-preview .chat-ogq .chat-image {
+  flex-shrink: 0;
+  margin-right: 0;
+}
+
+#macro-preview .chat-ogq .chat-message {
+  min-width: 0;
+}
+
+#profile .portrait {
+  width: 52px;
+  height: 52px;
+}
+
+#profile-id {
+  margin: 4px 0 0;
+  color: #728078;
+}
+
+#profile-description {
+  padding: 14px;
+  border-radius: 12px;
+  background: #f1f3f2;
+  color: #728078;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#profile-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 24px;
+}
+
+#profile-details h3 {
+  margin: 0 0 16px;
+  color: #267452;
+  font-size: 14px;
+}
+
+#profile-details > div > div + div {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #dde5df;
+}
+
+#profile-details dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px 8px;
+  font-size: 13px;
+  margin: 0;
+}
+
+#profile-details dt {
+  color: #728078;
+}
+
+#profile-details dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  #profile-details {
+    grid-template-columns: 1fr;
+  }
+
+  #profile {
+    padding: 20px;
+  }
+}
+
 .actions,
 .heading {
   display: flex;
@@ -100,6 +356,7 @@ textarea {
 }
 
 #status {
+  text-align: center;
   margin: 0;
   padding: 12px 32px;
   font-size: 14px;
@@ -292,6 +549,31 @@ form > .switch {
 }
 
 @media (max-width: 760px) {
+  #macros {
+    padding: 16px;
+  }
+
+  #macros > .heading > .actions:last-child {
+    flex: 1;
+  }
+
+  #macro-close {
+    margin-left: auto;
+  }
+
+  #macros[data-page="list"] main > section,
+  #macros[data-page="edit"] main > aside {
+    display: none;
+  }
+
+  #macros[data-page="edit"] #macro-back {
+    display: inline-flex;
+  }
+
+  #macros nav {
+    max-height: none;
+  }
+
   header {
     padding: 20px;
     flex-wrap: wrap;
@@ -355,4 +637,593 @@ form > .switch {
   border: 0;
   border-top: 1px solid #d4dfd7;
   margin: 0 0 20px;
+}
+
+#screen {
+  max-width: 960px;
+  margin: 24px auto 0;
+  padding: 0 24px;
+}
+
+.player {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #111;
+  color: #fff;
+}
+
+#video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #111;
+}
+
+#video-subtitle {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 40px);
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 65%);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transform: translateX(-50%);
+  pointer-events: none;
+  transition: bottom 0.2s ease;
+}
+
+.player:hover #video-subtitle,
+.player:focus-within #video-subtitle,
+.player.paused #video-subtitle {
+  bottom: 72px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #video-subtitle {
+    transition: none;
+  }
+}
+
+#video-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #aaa;
+  font-size: 15px;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+.playback {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 32px 16px 10px;
+  background: linear-gradient(transparent, rgb(0 0 0 / 80%));
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.player:hover .playback,
+.player:focus-within .playback,
+.player.paused .playback {
+  opacity: 1;
+}
+
+#timeline {
+  display: block;
+  width: 100%;
+  height: 16px;
+  padding: 0;
+  margin: 0 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: #fff;
+  cursor: pointer;
+}
+
+#timeline,
+#loudness {
+  --progress: 0%;
+  appearance: none;
+}
+
+#timeline::-webkit-slider-runnable-track,
+#loudness::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #fff var(--progress),
+    rgb(255 255 255 / 30%) var(--progress)
+  );
+}
+
+#timeline::-webkit-slider-thumb,
+#loudness::-webkit-slider-thumb {
+  appearance: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+#timeline::-moz-range-track,
+#loudness::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #fff var(--progress),
+    rgb(255 255 255 / 30%) var(--progress)
+  );
+}
+
+#timeline::-moz-range-thumb,
+#loudness::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
+  background: transparent;
+}
+
+.video-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.video-controls button,
+#quality {
+  color: #fff;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px;
+  font-size: 12px;
+}
+
+.video-controls button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+.video-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.player button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.player:focus {
+  outline: none;
+}
+
+#loudness {
+  width: 64px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: #fff;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.video-button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#pause svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.video-button text {
+  font: 8px sans-serif;
+  fill: currentColor;
+  stroke: none;
+}
+
+#clock {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #ddd;
+  min-width: 42px;
+  white-space: nowrap;
+}
+
+#live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 0;
+  white-space: nowrap;
+}
+
+#live::before {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #888;
+}
+
+#live.active::before {
+  background: #e35050;
+  animation: ping 1.8s ease-out infinite;
+}
+
+@keyframes ping {
+  0% {
+    box-shadow: 0 0 0 0 rgb(227 80 80 / 55%);
+  }
+
+  75%,
+  100% {
+    box-shadow: 0 0 0 5px rgb(227 80 80 / 0%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #live.active::before,
+  #chat-notice.unread summary::before {
+    animation: none;
+  }
+}
+
+#quality {
+  width: auto;
+  min-width: 54px;
+  white-space: nowrap;
+}
+
+.video-spacer {
+  flex: 1;
+}
+
+#video-volume {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+#video-volume #loudness {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: width 0.2s, opacity 0.2s, margin 0.2s;
+}
+
+#video-volume.expanded #loudness {
+  width: 64px;
+  margin-left: 6px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.video-settings,
+.resolution {
+  position: relative;
+  flex-shrink: 0;
+}
+
+#settings-menu,
+#subtitle-menu,
+#qualities {
+  position: absolute;
+  bottom: 42px;
+  right: 0;
+  min-width: 100px;
+  padding: 6px;
+  background: rgb(37 40 43 / 90%);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 30%);
+}
+
+#settings-menu button,
+#subtitle-menu button,
+#qualities button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+#settings-menu #subtitle-settings {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+#captions.active {
+  box-shadow: none;
+}
+
+#captions .caption-fill {
+  display: none;
+  fill: currentColor;
+  stroke: none;
+}
+
+#captions.active .caption-fill {
+  display: block;
+}
+
+#captions.active .caption-outline,
+#captions.active .caption-letters {
+  display: none;
+}
+
+#subtitle-menu {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  max-height: min(300px, calc(56.25vw - 90px));
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.subtitle-heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+#subtitle-menu #subtitle-back {
+  position: absolute;
+  left: 10px;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+}
+
+#subtitle-back svg {
+  width: 18px;
+  height: 18px;
+}
+
+#subtitle-options {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+#subtitle-options::-webkit-scrollbar {
+  display: none;
+}
+
+#subtitle-options button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 8px 16px;
+  border-radius: 0;
+  font-weight: bold;
+}
+
+#subtitle-options .selected {
+  color: #2ba7ff;
+  background: transparent;
+}
+
+#subtitle-options .selected::after {
+  content: "✓";
+  font-size: 16px;
+}
+
+#timeline-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.theater #screen,
+.theater #conversation {
+  max-width: 1400px;
+}
+
+.theater .player {
+  max-width: none;
+}
+
+body.theater {
+  min-height: 100vh;
+  color-scheme: dark;
+  background: #000;
+  color: #e4e7ea;
+}
+
+.theater header,
+.theater #menu-items,
+.theater #macros,
+.theater #profile,
+.theater #macros aside,
+.theater #macros section {
+  background: #080808;
+  border-color: #252525;
+}
+
+.theater header button,
+.theater #menu-items button,
+.theater dialog button,
+.theater dialog input,
+.theater dialog select,
+.theater dialog textarea {
+  background: #111;
+  border-color: #303030;
+  color: #e4e7ea;
+}
+
+.theater header button:hover,
+.theater #menu-items button:hover,
+.theater dialog button:hover {
+  background: #1c1c1c;
+}
+
+.theater #profile-description {
+  background: #111;
+  color: #a7b0b7;
+}
+
+.theater #profile-id,
+.theater #profile-details dt,
+.theater small {
+  color: #a7b0b7;
+}
+
+.theater #profile-details h3 {
+  color: #75bc9b;
+}
+
+#timeline-preview {
+  position: absolute;
+  bottom: 80px;
+  left: var(--position, 50%);
+  width: 196px;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+#timeline-preview div {
+  display: grid;
+  place-items: center;
+  height: 110px;
+  border: 2px solid #fff;
+  border-radius: 8px;
+  background: #25282b;
+  color: #454950;
+  font-size: 64px;
+  line-height: 1;
+}
+
+#timeline-offset {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: bold;
+  text-shadow: 0 1px 3px #000;
+}
+
+#qualities .selected {
+  color: #fff;
+  background: rgb(255 255 255 / 14%);
+}
+
+#qualities button:disabled {
+  color: #888;
+  background: transparent;
+  cursor: default;
+}
+
+.player:fullscreen {
+  border-radius: 0;
+  display: grid;
+  place-items: center;
+}
+
+.player:fullscreen #video {
+  height: 100%;
+  max-height: 100vh;
+  object-fit: contain;
+}
+
+@media (max-width: 600px) {
+  #screen {
+    padding: 0 12px;
+  }
+
+  .playback {
+    padding: 24px 10px 8px;
+  }
+
+  .video-controls {
+    gap: 2px;
+  }
+
+  #clock {
+    min-width: 32px;
+    font-size: 10px;
+  }
+
+  #video-volume.expanded #loudness {
+    width: 44px;
+  }
+
+  #video-volume {
+    position: relative;
+  }
+
+  #video-volume #loudness {
+    position: absolute;
+    bottom: 36px;
+    left: 0;
+  }
+
+  #live {
+    font-size: 10px;
+  }
+
+  .video-button {
+    width: 24px;
+    height: 24px;
+  }
+
+  .video-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  #quality {
+    min-width: 42px;
+  }
+
+  #timeline-preview {
+    bottom: 72px;
+    width: 160px;
+  }
+
+  #timeline-preview div {
+    height: 90px;
+  }
+}
+
+@media (max-width: 360px) {
+  .video-controls {
+    gap: 1px;
+  }
+
+  .video-button {
+    width: 24px;
+    height: 24px;
+  }
 }

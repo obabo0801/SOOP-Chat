@@ -68,8 +68,7 @@ let login;
         break;
 
       case 1:
-        message = `${data.bjNick}(${data.bjId})님 방송에 연결을 시도합니다.`;
-        break;
+        return;
 
       case 0:
         message = `${data.bjNick}(${data.bjId})님 방송에 연결 대기 중입니다.`;
@@ -1176,6 +1175,55 @@ let login;
     }
   }
 
+  const authenticate = async () => {
+    if (cookie) {
+      client.cookie = cookie;
+
+      return;
+    }
+
+    const result = await client.login(
+      getConfig('userId'),
+      getConfig('password'),
+      getConfig('secondPw')
+    );
+
+    if (result !== 1) {
+      throw new Error('로그인 실패');
+    }
+  };
+
+  let authenticating;
+
+  client.on('live', data => {
+    const required = [-6, -8].includes(Number(data.code));
+    const configured = cookie || getConfig('userId');
+
+    if (!required || !configured || client.cookie || authenticating || stopTask) {
+      return;
+    }
+
+    const bjId = client.bjId;
+
+    authenticating = client.safe(async () => {
+      await client.connecting;
+
+      if (stopTask || client.closed || client.bjId !== bjId) {
+        return;
+      }
+
+      await authenticate();
+
+      if (stopTask || client.closed || client.bjId !== bjId) {
+        return;
+      }
+
+      await client.connect();
+    }).finally(() => {
+      authenticating = null;
+    });
+  });
+
   client.on('join', () => {
     clearTimeout(login);
     login = null;
@@ -1243,21 +1291,10 @@ let login;
       return;
     }
 
-    if (Number(channel?.RESULT) === 1) {
-      if (cookie) {
-        client.cookie = cookie;
-      }
-      else {
-        const result = await client.login(
-          getConfig('userId'),
-          getConfig('password'),
-          getConfig('secondPw')
-        );
+    const result = Number(channel?.RESULT);
 
-        if (result !== 1) {
-          throw new Error('로그인 실패');
-        }
-      }
+    if ([1, -6, -8].includes(result)) {
+      await authenticate();
     }
   }
 

@@ -16,7 +16,8 @@ export const DOMAIN = {
   res: 'https://res.sooplive.com',
   static: 'https://static.file.sooplive.com',
 
-  ogq: 'https://ogq-sticker-global' + '-cdn-z01.sooplive.com'
+  ogq: 'https://ogq-sticker-global' + '-cdn-z01.sooplive.com',
+  market: 'https://ogqmarket.sooplive.com'
 };
 
 export const QUALITY = {

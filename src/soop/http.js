@@ -37,6 +37,38 @@ export async function getStatus(userId, options = {}) {
   return json;
 }
 
+export async function getEmblem(userId, options = {}) {
+  const json = await getStatus(userId, options);
+  const data = json?.DATA;
+
+  if (json?.RESULT !== 1 || !data?.emblem_img_url) {
+    return null;
+  }
+
+  const result = {
+    grade: data.emblem_grade,
+    level: data.emblem_level,
+    number: data.emblem_no,
+    url: data.emblem_img_url
+  };
+
+  return result;
+}
+
+export async function getDashboard(userId, options = {}) {
+  const url = new URL(
+    `/v1.1/channel/${encodeURIComponent(userId)}/dashboard`,
+    DOMAIN.channel
+  );
+
+  const result = await requestJson(url, {
+    ...options,
+    method: 'GET'
+  });
+
+  return result;
+}
+
 export async function postLiveInfo(bjId, options = {}) {
   const url = new URL('/afreeca/player_live_api.php', DOMAIN.live);
 
@@ -163,7 +195,12 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
   const result = {
     bjId,
     broadNo: Number(channel.BNO),
+    center: `${channel.CTIP}:${Number(channel.CTPT)}`,
+    captions: Boolean(channel.SUBTITLE_FLAG),
     quality,
+    qualities: channel.VIEWPRESET
+      .filter(item => item.name !== 'auto')
+      .map(item => ({ name: item.name, label: item.label })),
     url: source.href,
     headers
   };

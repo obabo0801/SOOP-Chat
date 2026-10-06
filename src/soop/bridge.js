@@ -82,7 +82,11 @@ export class Bridge {
           return;
         }
 
-        this.handler(this.parse(data));
+        try {
+          this.handler(this.parse(data));
+        } catch (error) {
+          this.client.emit('error', error);
+        }
       });
 
       ws.on('error', error => {

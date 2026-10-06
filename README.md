@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-green">
   <img src="https://img.shields.io/badge/node.js-24.16.0-brightgreen">
-  <img src="https://img.shields.io/badge/version-v1.0.7-blue">
+  <img src="https://img.shields.io/badge/version-v1.0.8-blue">
   <img src="https://img.shields.io/badge/status-experimental-orange">
 </p>
 
@@ -31,6 +31,26 @@ git@github.com:obabo0801/SOOP-Chat.git
 
 <details>
 <summary>❗ 업데이트 내역</summary>
+
+## ❗ 버전 1.0.8
+- 편집기 영상 재생 추가
+  - 화질, 볼륨, 자막 설정
+  - 녹화 구간 탐색, 라이브 복귀
+  - PIP, 스크린 모드, 단축키 지원
+- 편집기 채팅 화면 추가
+  - 일반 채팅, 매니저 채팅 지원
+  - 이모티콘, OGQ 전송 지원
+  - 이전 기록, 채팅 모아보기
+  - 프로필, 채금, 강퇴, 귓속말 지원
+  - 공지, 채팅 규칙, 투표 표시
+- 매크로 답변 미리보기 추가
+- 스트리머 정보, 엠블럼 표시 추가
+- 고화질 연결 충돌 처리 개선
+- 성인 방송 로그인 처리 수정
+- 방송 정보 변경 오류 처리 개선
+- 채팅 스크롤 유지 개선
+- 얼음 상태 타이머 전송 제한
+- 룰렛 `?` 항목 출력 제외
 
 ## ❗ 버전 1.0.7
 - 매크로 편집 화면 추가
@@ -213,12 +233,6 @@ npm run stop:multi
 
 `.env`는 공개하지 마세요.
 
-| 파일 | 처리 |
-| --- | --- |
-| 기본 `.env` 없음 | 최초 실행 시 생성 |
-| 기존 `.env` | 유지 |
-| 지정한 설정 파일 없음 | 오류 |
-
 `config.json`에서 값 대신 환경변수 이름을 적어두면  
 `.env` 값을 불러와 사용할 수 있습니다.
 
@@ -257,11 +271,18 @@ IDLE="true"
 
 | 항목 | 내용 |
 | --- | --- |
-| 편집 화면 | `config.json`의 `editor`로 자동 열기 설정 |
-| 편집 기능 | 추가<br>수정<br>삭제<br>OGQ 선택 |
-| 설정 파일 | `macros.json` |
-| 설정 반영 | 파일 저장 시 자동 반영 |
-| 답변 권한 | 로그인한 매니저 이상 |
+| 자동 열기 | `editor` |
+| 편집 | 추가<br>수정<br>삭제 |
+| 영상 | 화질 선택<br>라이브 복귀<br>되돌아보기 |
+| 채팅 | 실시간 표시<br>기록 불러오기 |
+| 사용자 | 정보<br>관리<br>귓속말 |
+| 규칙 | 접기<br>펼치기 |
+| 고화질 | SOOP 패키지 |
+| 녹화 | 실행 시 시작<br>종료 시 삭제 |
+| 재접속 | 녹화 유지<br>재생 위치 유지 |
+| 설정 | `macros.json` |
+| 반영 | 저장 즉시 |
+| 답변 권한 | 매니저 이상 |
 | 파일 없음 | 기본 설정 생성 |
 | 개인 설정 | 배포 제외 |
 
@@ -320,7 +341,6 @@ IDLE="true"
 | `commands` | `true` | 없는 명령어 숨김 |
 | `edit` | `true` | 매니저 채팅 수정 |
 | `count` | 1 ~ 3 | 채금 횟수 |
-|  | 빈 값<br>미설정 | 경고만 전송 |
 | `reason` | 내용 | 자동관리 사유 |
 | `cooldown` | 초 | 재실행 대기 시간 |
 | `interval` | 초 | 반복 시간 |
@@ -329,7 +349,7 @@ IDLE="true"
 | --- | --- |
 | 명령어 | 대소문자 구분 없음 |
 | 정규식 | 단어 경계 자동 처리 |
-| OGQ 이름 | `/ogq` 목록에서 확인 |
+| OGQ | `/ogq` 목록에서 확인 |
 | 빈 답변 | 응답 끄기<br>OGQ 전용 제외 |
 | 답변 수정 | 매니저 채팅<br>`!명령어 내용` |
 | 답변 삭제 | 매니저 채팅<br>명령어만 입력 |

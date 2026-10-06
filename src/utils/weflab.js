@@ -175,7 +175,8 @@ export function format(roulette, count, numbers = [], title = '') {
   }
 
   lines.push(
-    ...[...roulette.items]
+    ...roulette.items
+      .filter(item => item.name.trim() !== '?')
       .sort((a, b) => b.rate - a.rate)
       .map(item => {
         const prefix = /^[\p{L}\p{N}]/u.test(item.name.trimStart()) ? '· ' : '';

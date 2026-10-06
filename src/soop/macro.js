@@ -858,6 +858,10 @@ export class SoopMacro {
       return Promise.resolve(false);
     }
 
+    if (rule.kind === 'interval' && this.client.iceMode) {
+      return Promise.resolve(false);
+    }
+
     const now = Date.now();
     let key;
 
@@ -901,6 +905,10 @@ export class SoopMacro {
   }
 
   async run(rule, data, match) {
+    if (rule.kind === 'interval' && this.client.iceMode) {
+      return false;
+    }
+
     const warning = rule.action === 'warn' || (rule.action === 'mute' && !rule.count);
 
     if (['mute', 'kick', 'warn'].includes(rule.action)) {
@@ -1085,6 +1093,10 @@ export class SoopMacro {
       if (ogq && rule.ogqNumber > ogq.max) {
         ogq = null;
       }
+    }
+
+    if (rule.kind === 'interval' && this.client.iceMode) {
+      return false;
     }
 
     if (!this.canSend() || !this.rules.includes(rule) || (!message && !ogq)) {

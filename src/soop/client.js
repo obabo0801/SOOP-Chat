@@ -64,12 +64,14 @@ export class SoopClient {
     this.ending = null;
 
     this.channel = null;
+    this.emblem = null;
     this.userId = null;
     this.userFlag = null;
 
     this.info = null;
     this.category = new Map();
     this.rule = null;
+    this.notice = null;
     this.poll = null;
 
     this.iceMode = null;
@@ -132,6 +134,10 @@ export class SoopClient {
     for (const handler of handlers) {
       handler(...args);
     }
+  }
+
+  system(message = '') {
+    this.emit('system', { message });
   }
 
   sleep(ms = this.delay) {
@@ -310,6 +316,7 @@ export class SoopClient {
 
     if (this.bjId !== bjId) {
       this.stopPackage();
+      this.emblem = null;
     }
 
     this.bjId = bjId;
@@ -1717,7 +1724,9 @@ export class SoopClient {
   }
 
   updateBroadcast(data = {}) {
-    void (data.siMinAge ?? data.siMinAge);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return;
+    }
 
     const prev = this.broadcast;
 
@@ -1823,7 +1832,8 @@ export class SoopClient {
   }
 
   parseTag(text = '', name = '') {
-    const value = this.decode(text);
+    const source = Array.isArray(text) ? text.join(',') : String(text ?? '');
+    const value = this.decode(source);
 
     if (!value) {
       const response = [];
@@ -1877,7 +1887,8 @@ export class SoopClient {
       http.getEmoticon(options),
       http.getRecent(options),
       http.getSignature(this.bjId, options),
-      http.postOgqList(this.bjId, options)
+      http.postOgqList(this.bjId, options),
+      http.getEmblem(this.bjId, options)
     ]);
 
     const get = index =>
@@ -1890,12 +1901,14 @@ export class SoopClient {
     const recent = get(4);
     const signature = get(5);
     const ogq = get(6);
+    const emblem = get(7);
 
     this.info = info;
     this.rule = rule;
     this.recent = recent;
     this.signature = signature;
     this.ogq = ogq;
+    this.emblem = emblem;
 
     this.category = this.mapCategory(this.flatCategory(category));
 
@@ -2035,6 +2048,19 @@ export class SoopClient {
       ...this.network.httpOptions,
       cookie: this.cookie
     });
+
+    return result;
+  }
+
+  async sendEmblem(userId = this.bjId) {
+    const result = await http.getEmblem(userId, {
+      ...this.network.httpOptions,
+      cookie: this.cookie
+    });
+
+    if (userId === this.bjId) {
+      this.emblem = result;
+    }
 
     return result;
   }
@@ -2564,6 +2590,10 @@ export class SoopClient {
     }
 
     return '';
+  }
+
+  makeEmblemUrl(emblem = this.emblem) {
+    return emblem?.url || '';
   }
 
   findOgq(index = 0) {

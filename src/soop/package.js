@@ -1,10 +1,124 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket } from 'ws';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { DOMAIN, PACKAGE, QUALITY } from '#soop/config';
 import * as http from '#soop/http';
 
+const execute = promisify(execFile);
+
+async function occupied(port, center, ignored) {
+  if (process.platform !== 'win32') {
+    return false;
+  }
+
+  const { stdout } = await execute('netstat.exe', ['-ano'], {
+    windowsHide: true,
+    timeout: 5000,
+    maxBuffer: 1048576
+  });
+  const address = new RegExp(`^(127\\.0\\.0\\.1|\\[::1\\]):${port}$`);
+  const owners = new Set();
+  const sockets = [];
+  let busy = false;
+
+  for (const line of stdout.split(/\r?\n/)) {
+    const fields = line.trim().split(/\s+/);
+
+    if (fields[0] === 'TCP' && fields[3] === 'ESTABLISHED') {
+      const local = fields[1].split(':').at(-1);
+
+      sockets.push(fields);
+
+      if (address.test(fields[1])) {
+        owners.add(fields[4]);
+      }
+
+      if (address.test(fields[2]) && local !== String(ignored)) {
+        busy = true;
+      }
+    }
+  }
+
+  if (!busy) {
+    return false;
+  }
+
+  if (!center) {
+    return true;
+  }
+
+  const connected = sockets.some(fields => {
+    return owners.has(fields[4]) && fields[2] === center;
+  });
+
+  return connected;
+}
+
+async function discover() {
+  const ws = new WebSocket(DOMAIN.package, 'package', { origin: DOMAIN.play });
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(new Error('패키지 응답 시간 초과')), 2000);
+    const finish = (error, value) => {
+      clearTimeout(timer);
+
+      if (error) {
+        reject(error);
+      }
+      else {
+        resolve(value);
+      }
+    };
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ SVC: 'CAPTION', RESULT: 1, DATA: { nCaption: 5 } }));
+    });
+    ws.on('message', data => {
+      try {
+        const packet = JSON.parse(data.toString());
+
+        if (packet.SVC === 'HTMLPORT') {
+          finish(null, Number(packet.DATA?.HTMLPLAYER_PORT));
+        }
+      } catch {}
+    });
+    ws.on('error', error => finish(error));
+    ws.on('close', () => finish(new Error('패키지 연결 종료')));
+  }).finally(() => {
+    if (ws.readyState === WebSocket.CONNECTING) {
+      ws.terminate();
+    }
+    else {
+      ws.close();
+    }
+  });
+
+  return port;
+}
+
 export class Package extends EventEmitter {
-  constructor(client, quality) {
+  static async available(connection, center) {
+    try {
+      const socket = connection?.ws?._socket;
+      const port = socket?.remotePort || (await discover());
+
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return false;
+      }
+
+      if (connection?.ready && connection.ws?.readyState === WebSocket.OPEN) {
+        return true;
+      }
+
+      const busy = await occupied(port, center, socket?.localPort);
+
+      return !busy;
+    } catch {
+      return false;
+    }
+  }
+
+  constructor(client, quality, options = {}) {
     super();
     this.network = client.network;
     this.bjId = client.bjId;
@@ -13,6 +127,7 @@ export class Package extends EventEmitter {
     this.guid = client.guid;
     this.uuid = client.uuid;
     this.quality = quality;
+    this.exclusive = options.exclusive ?? false;
     this.ws = null;
     this.manager = null;
     this.channel = null;
@@ -59,7 +174,7 @@ export class Package extends EventEmitter {
         );
       });
       ws.on('message', data => {
-        if (this.closed || this.ws) {
+        if (this.closed || this.ws || this.manager !== ws) {
           return;
         }
 
@@ -83,9 +198,9 @@ export class Package extends EventEmitter {
           return;
         }
 
-        this.open(port);
         this.manager = null;
         ws.close();
+        void this.reserve(port);
       });
       ws.on('error', () => {
         if (this.manager === ws) {
@@ -100,6 +215,26 @@ export class Package extends EventEmitter {
     });
 
     return result;
+  }
+
+  async reserve(port) {
+    try {
+      const center = `${this.channel.CTIP}:${Number(this.channel.CTPT)}`;
+
+      if (this.exclusive && (await occupied(port, center))) {
+        const error = new Error('고화질 사용 중');
+
+        error.code = 'SOOP_BUSY';
+
+        throw error;
+      }
+
+      if (!this.closed) {
+        this.open(port);
+      }
+    } catch (error) {
+      this.fail(error);
+    }
   }
 
   open(port) {
@@ -178,6 +313,15 @@ export class Package extends EventEmitter {
     }
 
     const { SVC: svc, RESULT: result, DATA: data = {} } = packet;
+
+    if (Number(data.ERRCODE ?? result) === -39998) {
+      const error = new Error('고화질 사용 중');
+
+      error.code = 'SOOP_BUSY';
+      this.fail(error);
+
+      return;
+    }
 
     if (Number(result) === -1990 && this.ready && this.pending && !this.pending.retry) {
       this.retry();

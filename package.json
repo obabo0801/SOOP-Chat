@@ -1,6 +1,6 @@
 {
   "name": "soop-chat",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "license": "MIT",
   "author": "unjongjjing",
   "type": "module",
@@ -26,6 +26,7 @@
   ],
   "dependencies": {
     "dotenv": "^17.4.2",
+    "hls.js": "^1.7.3",
     "ws": "^8.21.0"
   }
 }

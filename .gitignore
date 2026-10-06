@@ -149,4 +149,4 @@ vite.config.ts.timestamp-*
 
 /tenants.json
 /macros.json
-.update.bat
+/update.bat

@@ -258,8 +258,11 @@ export function dispatch(soop, pkt) {
     }
 
     case SVC.ICE_MODE_EX: {
+      const index = Number(fields[0]);
+
+      soop.iceMode = index !== 0;
       soop.emit('iceMode', {
-        index: Number(fields[0]),
+        index,
         choice: Number(fields[1]),
         auth: parseIceAuth(fields[2]),
         count: Number(fields[3]),
@@ -546,10 +549,12 @@ export function dispatch(soop, pkt) {
         break;
       }
 
-      soop.emit('notice', {
+      soop.notice = {
         state: Number(fields[1]),
         message: fields[3]
-      });
+      };
+
+      soop.emit('notice', soop.notice);
       break;
     }
 
@@ -726,6 +731,7 @@ export function dispatch(soop, pkt) {
       Object.assign(user, parseMonth(fields[1]));
 
       soop.userList.set(userId, user);
+      soop.emit('userExtend', { ...user });
       break;
     }
 
@@ -929,6 +935,7 @@ export function userList(soop, fields = []) {
     }
 
     const user = {
+      ...soop.userList.get(id),
       id,
       name: fields[2],
       exit: Number(fields[3]),
