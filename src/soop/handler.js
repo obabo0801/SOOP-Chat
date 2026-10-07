@@ -5,7 +5,8 @@ import { normalize } from '#soop/http';
 export function dispatch(soop, pkt) {
   if (
     soop.idle
-    && ![SVC.LOGIN, SVC.JOIN_CHANNEL, SVC.QUIT_CHANNEL].includes(pkt.service)
+    && ![SVC.LOGIN, SVC.JOIN_CHANNEL, SVC.QUIT_CHANNEL, SVC.CLOSE_BROAD].includes(pkt.service)
+    && !soop.notify?.accepts(pkt.service)
   ) {
     return;
   }
@@ -70,6 +71,8 @@ export function dispatch(soop, pkt) {
         time: Number(fields[2]),
         count: Number(fields[3]),
         adminId: fields[4],
+        adminType: Number(fields[5]),
+        adminNick: fields[6],
         userId: fields[0],
         userNick: fields[7],
         userFlag: fields[1],
@@ -171,6 +174,13 @@ export function dispatch(soop, pkt) {
       if (error(fields, 2)) {
         soop.emit('error', fields[0]);
         break;
+      }
+
+      const user = soop.userList.get(fields[0]);
+
+      if (user) {
+        user.flag = fields[1];
+        Object.assign(user, userInfo(soop, fields[1]));
       }
 
       soop.emit('subBj', {
@@ -451,6 +461,11 @@ export function dispatch(soop, pkt) {
     }
 
     case SVC.CLOSE_BROAD: {
+      soop.emit('broadcastEnd', {
+        bjId: soop.bjId,
+        broadNo: soop.channel?.BNO,
+        message: soop.ending
+      });
       soop.disconnect();
       break;
     }
@@ -518,6 +533,7 @@ export function dispatch(soop, pkt) {
       const trans = Number(fields[4]);
 
       soop.emit('translation', {
+        preview: Boolean(soop.translationPreview),
         index: Number(fields[0]),
         mode: Number(fields[1]),
         message: fields[2],
@@ -621,8 +637,21 @@ export function dispatch(soop, pkt) {
     }
 
     case SVC.OGQ_EMOTICON: {
+      if (error(fields, 8)) {
+        const message = fields[1] || fields[0] || 'OGQ 수신 오류';
+
+        soop.emit('error', message);
+        break;
+      }
+
       const ogqId = fields[2];
       const subId = fields[3];
+      const valid = ogqId && /^[1-9]\d*$/.test(subId) && fields[5];
+
+      if (!valid) {
+        soop.emit('error', 'OGQ 수신 오류');
+        break;
+      }
 
       const ext = Number(fields[17]) === 1 ? 'webp' : 'png';
 
@@ -687,6 +716,11 @@ export function dispatch(soop, pkt) {
         data = JSON.parse(fields[0]);
       } catch (error) {
         soop.emit('error', error);
+        break;
+      }
+
+      if (!data || typeof data.type !== 'string') {
+        soop.emit('error', new Error('미션 정보 오류'));
         break;
       }
 

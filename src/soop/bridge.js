@@ -91,11 +91,19 @@ export class Bridge {
 
       ws.on('error', error => {
         finish(error);
+
+        if (this.ws === ws && !signal?.aborted) {
+          this.client.emit('error', error);
+        }
       });
 
       ws.on('close', () => {
         if (this.ws === ws) {
           this.stopPing();
+
+          if (!signal?.aborted) {
+            this.client.emit('connectionClose', { source: 'bridge' });
+          }
         }
 
         finish(new Error('브릿지 연결 종료'));
@@ -322,6 +330,12 @@ export class Bridge {
     if (data.pcEndingMsg) {
       this.client.endingMsg(data.pcEndingMsg);
     }
+
+    this.client.emit('broadcastEnd', {
+      bjId: this.client.bjId,
+      broadNo: this.client.channel?.BNO,
+      message: this.client.ending
+    });
   }
 
   makeInitGw() {

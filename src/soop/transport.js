@@ -253,7 +253,7 @@ export class Transport {
     });
   }
 
-  close(error = new Error('연결 중지')) {
+  close(error = new Error('연결 정지')) {
     if (this.error) {
       return;
     }

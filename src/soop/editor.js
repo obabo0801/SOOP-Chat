@@ -3,13 +3,16 @@ import fs from 'fs';
 import http from 'http';
 import os from 'os';
 import path from 'path';
+import { isIP } from 'net';
 import { spawn } from 'child_process';
 import * as api from '#soop/http';
 import { createVideo } from '#soop/video';
 import { Transport } from '#soop/transport';
 import { Package } from '#soop/package';
 import { Chat } from '#soop/chat';
+import * as control from '#soop/control';
 import { DOMAIN } from '#soop/config';
+import * as weflab from '#utils/weflab';
 
 const editors = new WeakMap();
 
@@ -28,6 +31,9 @@ function describe(id, data) {
   const result = {
     id,
     image: data.profile_image,
+    broad: data.broad,
+    favorite: data.is_favorite,
+    subscribed: data.is_subscription,
     station: {
       user_nick: data.station?.user_nick,
       description: data.station?.display?.profile_text,
@@ -193,7 +199,46 @@ export function openEditor(macro, options = {}) {
   return result;
 }
 
-async function createEditor(macro, { browser = true, account } = {}) {
+async function createEditor(macro, options = {}) {
+  const { browser = true, account, host = '127.0.0.1', port = 0, origins = [] } = options;
+
+  if (typeof host !== 'string' || (!isIP(host) && host !== 'localhost')) {
+    throw new Error('접속 IP 오류');
+  }
+
+  if (!Number.isInteger(port) || port < 0 || port > 65535 || !Array.isArray(origins)) {
+    throw new Error('접속 설정 오류');
+  }
+
+  const allowed = new Set();
+
+  for (const value of origins) {
+    let address;
+
+    try {
+      address = new URL(value);
+    } catch {
+      throw new Error('외부 주소 오류');
+    }
+
+    if (
+      typeof value !== 'string'
+      || !['http:', 'https:'].includes(address.protocol)
+      || address.username
+      || address.password
+      || address.pathname !== '/'
+      || address.search
+      || address.hash
+    ) {
+      throw new Error('외부 주소 오류');
+    }
+
+    allowed.add(address.origin);
+  }
+
+  const hostname = ['0.0.0.0', '::'].includes(host) ? '127.0.0.1' : host;
+  const authority = isIP(hostname) === 6 ? `[${hostname}]` : hostname;
+
   const key = crypto
     .createHash('sha256')
     .update(path.resolve(macro.file || path.join(process.cwd(), 'macros.json')))
@@ -224,9 +269,15 @@ async function createEditor(macro, { browser = true, account } = {}) {
   let profile = null;
   let cookie;
   let attempted;
+  let signing = false;
 
-  if (previous) {
-    const origin = `http://127.0.0.1:${previous.port}`;
+  if (
+    previous
+    && (previous.host || '127.0.0.1') === host
+    && (!port || previous.port === port)
+    && JSON.stringify(previous.origins || []) === JSON.stringify([...allowed])
+  ) {
+    const origin = `http://${authority}:${previous.port}`;
 
     try {
       const response = await fetch(`${origin}/api/editor`, {
@@ -278,7 +329,7 @@ async function createEditor(macro, { browser = true, account } = {}) {
 
   const stickers = async () => {
     const options = { ...macro.client.network?.httpOptions };
-    const user = account?.() || {};
+    const user = macro.client.signedout ? {} : account?.() || {};
     let current = macro.client.cookie;
 
     if (!api.cookieString(current)) {
@@ -308,7 +359,7 @@ async function createEditor(macro, { browser = true, account } = {}) {
             });
           }
 
-          if (result?.data?.RESULT === 1) {
+          if (result?.data?.RESULT === 1 && !macro.client.signedout) {
             cookie = result.cookie;
           }
         }
@@ -416,21 +467,34 @@ async function createEditor(macro, { browser = true, account } = {}) {
 
     void Promise.resolve()
       .then(async () => {
-        if (request.headers.host !== new URL(origin).host) {
+        const hosts = [...allowed].map(value => new URL(value).host);
+
+        if (!hosts.includes(request.headers.host)) {
           reply(response, 403, { error: '접속 주소 오류' });
 
           return;
         }
 
-        if (request.headers.origin && request.headers.origin !== origin) {
+        if (request.headers.origin && !allowed.has(request.headers.origin)) {
           reply(response, 403, { error: '접속 주소 오류' });
 
           return;
         }
 
         if (request.method === 'GET' && request.url.startsWith('/media/')) {
+          const authenticated = request.headers.authorization === `Bearer ${token}`
+            || request.headers.cookie?.split(';').some(value =>
+              value.trim() === `soop-editor=${token}`
+            );
+
+          if (!authenticated) {
+            reply(response, 401, { error: '사이트를 다시 열어주세요' });
+
+            return;
+          }
+
           if (macro.closed) {
-            reply(response, 410, { error: '프로그램 종료됨' });
+            reply(response, 410, { error: '프로그램 종료 됨' });
 
             return;
           }
@@ -467,8 +531,15 @@ async function createEditor(macro, { browser = true, account } = {}) {
         const routes = [
           '/api/config',
           '/api/editor',
+          '/api/account',
           '/api/stream',
           '/api/chat',
+          '/api/multi',
+          '/api/notify',
+          '/api/logs',
+          '/api/kicks',
+          '/api/members',
+          '/api/roulette',
           '/api/poll',
           '/api/user'
         ];
@@ -480,10 +551,19 @@ async function createEditor(macro, { browser = true, account } = {}) {
         }
 
         if (request.headers.authorization !== `Bearer ${token}`) {
-          reply(response, 401, { error: '편집 화면을 다시 열어주세요' });
+          reply(response, 401, { error: '사이트를 다시 열어주세요' });
 
           return;
         }
+
+        const secure = [...allowed].some(value => {
+          const address = new URL(value);
+
+          return address.host === request.headers.host && address.protocol === 'https:';
+        });
+        const session = `soop-editor=${token}; Path=/; HttpOnly; SameSite=Strict`;
+
+        response.setHeader('Set-Cookie', session + (secure ? '; Secure' : ''));
 
         if (request.url === '/api/editor') {
           if (
@@ -514,7 +594,172 @@ async function createEditor(macro, { browser = true, account } = {}) {
         }
 
         if (macro.closed) {
-          reply(response, 410, { error: '프로그램 종료됨' });
+          reply(response, 410, { error: '프로그램 종료 됨' });
+
+          return;
+        }
+
+        if (address.pathname === '/api/members') {
+          if (request.method !== 'GET') {
+            reply(response, 405, { error: '요청 오류' });
+
+            return;
+          }
+
+          const data = chat.members(
+            address.searchParams.get('query') || '',
+            address.searchParams.get('cursor') || ''
+          );
+
+          for (const user of data.entries) {
+            if (user.role === '스트리머' && profile?.id === macro.client.bjId) {
+              user.name = macro.client.bjNick || profile.station?.user_nick || user.name;
+              user.image = profile.image;
+            }
+          }
+
+          reply(response, 200, data);
+
+          return;
+        }
+
+        if (address.pathname === '/api/roulette') {
+          if (request.method !== 'POST') {
+            reply(response, 405, { error: '요청 오류' });
+
+            return;
+          }
+
+          const rule = await body(request);
+
+          if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+            throw new Error('룰렛 설정 오류');
+          }
+
+          if (rule.default === undefined) {
+            reply(response, 200, { message: '' });
+
+            return;
+          }
+
+          const count = Number(rule.default);
+
+          if (!Number.isSafeInteger(count) || count < 1) {
+            throw new Error('룰렛 설정 오류');
+          }
+
+          const index =
+            typeof rule.index === 'object'
+              ? (rule.index?.[count] ?? 0)
+              : (rule.index ?? 0);
+          const numbers = rule.numbers || [];
+          const title = rule.title || '';
+          const invalid =
+            !Number.isSafeInteger(index)
+            || index < 0
+            || !Array.isArray(numbers)
+            || numbers.flat().some(value => !Number.isSafeInteger(value) || value < 1)
+            || typeof title !== 'string';
+
+          if (invalid) {
+            throw new Error('룰렛 설정 오류');
+          }
+
+          let user;
+
+          if (typeof macro.options.weflab === 'function') {
+            user = macro.options.weflab();
+          }
+          else {
+            user = macro.options.weflab;
+          }
+
+          if (!user) {
+            throw new Error('WEFLAB 설정 없음');
+          }
+
+          const roulette = await weflab.roulette(user, count, index);
+          const message = weflab.format(roulette, count, numbers, title);
+
+          reply(response, 200, { message });
+
+          return;
+        }
+
+        if (address.pathname === '/api/kicks') {
+          if (request.method !== 'GET') {
+            reply(response, 405, { error: '요청 오류' });
+
+            return;
+          }
+
+          const list = await chat.kicks();
+
+          reply(response, 200, list);
+
+          return;
+        }
+
+        if (address.pathname === '/api/logs') {
+          if (request.method !== 'GET') {
+            reply(response, 405, { error: '요청 오류' });
+
+            return;
+          }
+
+          const options = Object.fromEntries(address.searchParams);
+          const data = chat.search(options);
+
+          reply(response, 200, data);
+
+          return;
+        }
+
+        if (address.pathname === '/api/notify') {
+          const notify = macro.client.notify;
+
+          if (!notify) {
+            throw new Error('알림 설정을 사용할 수 없습니다.');
+          }
+
+          if (request.method === 'GET') {
+            reply(response, 200, notify.settings());
+          }
+          else if (request.method === 'PUT') {
+            reply(response, 200, notify.save(await body(request)));
+          }
+          else if (request.method === 'POST') {
+            await notify.test(await body(request));
+            reply(response, 200, {});
+          }
+          else {
+            reply(response, 405, { error: '요청 오류' });
+          }
+
+          return;
+        }
+
+        if (address.pathname === '/api/multi') {
+          if (request.method === 'GET') {
+            reply(response, 200, await control.multiStatus());
+          }
+          else if (request.method === 'POST') {
+            const data = await body(request);
+
+            if (data.action === 'start') {
+              reply(response, 200, await control.startMulti(data.count));
+            }
+            else if (data.action === 'stop') {
+              await control.stopMulti();
+              reply(response, 200, { running: false, rows: [] });
+            }
+            else {
+              throw new Error('명령 오류');
+            }
+          }
+          else {
+            reply(response, 405, { error: '요청 오류' });
+          }
 
           return;
         }
@@ -535,8 +780,9 @@ async function createEditor(macro, { browser = true, account } = {}) {
             }
           }
           else if (request.method === 'POST') {
-            await chat.action(await body(request));
-            reply(response, 200, {});
+            const result = await chat.action(await body(request));
+
+            reply(response, 200, result || {});
           }
           else {
             reply(response, 405, { error: '요청 오류' });
@@ -548,7 +794,7 @@ async function createEditor(macro, { browser = true, account } = {}) {
         if (address.pathname === '/api/poll') {
           const poll = chat.poll;
 
-          if (!poll || poll.status !== 1) {
+          if (!poll || ![1, 3, 4].includes(poll.status)) {
             throw new Error('진행 중인 투표 없음');
           }
 
@@ -559,13 +805,17 @@ async function createEditor(macro, { browser = true, account } = {}) {
               throw new Error('투표 조회 실패');
             }
 
-            reply(response, 200, { survey: poll.surveyNo, ...result.data });
+            reply(response, 200, {
+              ...result.data,
+              survey: poll.surveyNo,
+              status: poll.status
+            });
           }
           else if (request.method === 'POST') {
             const data = await body(request);
             const logged = macro.client.info?.IS_LOGIN === 1;
 
-            if (!logged || data.survey !== poll.surveyNo) {
+            if (!logged || poll.status !== 1 || data.survey !== poll.surveyNo) {
               throw new Error('투표 요청 오류');
             }
 
@@ -588,6 +838,111 @@ async function createEditor(macro, { browser = true, account } = {}) {
           }
           else {
             reply(response, 405, { error: '요청 오류' });
+          }
+
+          return;
+        }
+
+        if (address.pathname === '/api/account' && request.method === 'POST') {
+          const data = await body(request);
+
+          if (signing) {
+            throw new Error('로그인 처리 중입니다.');
+          }
+
+          const client = macro.client;
+          const previous = {
+            cookie: client.cookie,
+            info: client.info,
+            signedout: client.signedout
+          };
+
+          signing = true;
+
+          let authenticated = false;
+
+          try {
+            await client.connecting;
+
+            if (!data || typeof data !== 'object') {
+              throw new Error('로그인 요청 오류');
+            }
+
+            if (data.action === 'login') {
+              if (client.info?.IS_LOGIN === 1) {
+                throw new Error('이미 로그인되어 있습니다.');
+              }
+
+              const valid =
+                typeof data.id === 'string'
+                && typeof data.password === 'string'
+                && (!data.second || typeof data.second === 'string');
+
+              if (!valid || !data.id.trim() || !data.password) {
+                throw new Error('아이디와 비밀번호를 입력해주세요.');
+              }
+
+              const result = await client.login(
+                data.id.trim(),
+                data.password,
+                data.second || ''
+              );
+
+              if (result !== 1 || client.info?.IS_LOGIN !== 1) {
+                client.cookie = previous.cookie;
+                client.info = previous.info;
+
+                if (result === -2) {
+                  throw new Error('2차 비밀번호를 확인해주세요.');
+                }
+
+                throw new Error(
+                  '로그인에 실패했습니다. 아이디와 비밀번호를 확인해주세요.'
+                );
+              }
+
+              client.signedout = false;
+              authenticated = true;
+              cookie = null;
+
+              const info = client.info;
+
+              if (client.isOpen()) {
+                client.disconnect();
+                try {
+                  await client.connect();
+                } finally {
+                  client.info = info;
+                }
+              }
+            }
+            else if (data.action === 'logout') {
+              client.signedout = true;
+              cookie = null;
+              attempted = undefined;
+              await client.logout();
+            }
+            else {
+              throw new Error('로그인 요청 오류');
+            }
+
+            loaded = 0;
+            chat.flag = null;
+            reply(response, 200, { state: chat.state() });
+          } catch (error) {
+            if (data?.action === 'login' && !authenticated) {
+              client.cookie = previous.cookie;
+              client.info = previous.info;
+            }
+
+            if (client.cookie === previous.cookie) {
+              client.signedout = previous.signedout;
+            }
+
+            throw error;
+          } finally {
+            signing = false;
+            chat.broadcast('state', chat.state());
           }
 
           return;
@@ -625,10 +980,17 @@ async function createEditor(macro, { browser = true, account } = {}) {
               profile.dashboard = dashboard.value;
             }
 
-            reply(response, 200, { image: data?.profile_image || '', profile });
+            reply(response, 200, {
+              image: data?.profile_image || '',
+              profile,
+              user: chat.user({ userId: id })
+            });
           }
           else {
-            reply(response, 200, { image: data?.profile_image || '' });
+            reply(response, 200, {
+              image: data?.profile_image || '',
+              user: chat.user({ userId: id })
+            });
           }
 
           return;
@@ -658,7 +1020,7 @@ async function createEditor(macro, { browser = true, account } = {}) {
           const data = await body(request);
 
           if (macro.closed) {
-            reply(response, 410, { error: '프로그램 종료됨' });
+            reply(response, 410, { error: '프로그램 종료 됨' });
 
             return;
           }
@@ -683,18 +1045,27 @@ async function createEditor(macro, { browser = true, account } = {}) {
         await refresh();
 
         const data = snapshot(macro);
+        const current = profile?.id === macro.client.bjId ? profile : null;
+        const viewers = chat.state().viewers ?? current?.broad?.current_sum_viewer ?? 0;
 
         reply(response, 200, {
           ...data,
+          origins,
           player: macro.client.bjId || '',
           packs: packs(macro.client),
           emoticons: [...(macro.client.emoticon?.values() || [])],
           ceremonies: ceremonies(macro.client),
-          sender: chat.user({
-            userId: macro.client.userId,
-            userNick: macro.client.info?.LOGIN_NICK || '미리보기',
-            userFlag: macro.client.userFlag
-          }),
+          broadcast: {
+            ...macro.client.broadcast,
+            number: macro.client.channel?.BNO,
+            languages: macro.client.channel?.LANG_TAGS || [],
+            categories: macro.client.channel?.CATEGORY_TAGS || []
+          },
+          restricted: {
+            password: macro.client.channel?.BPWD === 'Y',
+            adult: Number(macro.client.channel?.GRADE) >= 19
+          },
+          viewers,
           profile: profile?.id === macro.client.bjId ? profile : null,
           name:
             macro.client.bjNick || macro.client.station?.user_nick || macro.client.bjId
@@ -720,16 +1091,23 @@ async function createEditor(macro, { browser = true, account } = {}) {
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(previous?.port || 0, '127.0.0.1', resolve);
+    server.listen(port || previous?.port || 0, host, resolve);
   });
 
-  const origin = `http://127.0.0.1:${server.address().port}`;
+  const origin = `http://${authority}:${server.address().port}`;
+
+  allowed.add(origin);
 
   const url = `${origin}/#${token}`;
 
   void video.start();
 
-  fs.writeFileSync(file, JSON.stringify({ port: server.address().port, token }), {
+  fs.writeFileSync(file, JSON.stringify({
+    port: server.address().port,
+    token,
+    host,
+    origins: [...allowed].filter(value => value !== origin)
+  }), {
     mode: 0o600
   });
 

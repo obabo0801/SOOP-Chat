@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import { SoopClient } from '#soop/client';
+import { SoopNotify } from '#soop/notify';
 import * as http from '#soop/http';
 
 export class SoopManager {
@@ -57,6 +58,8 @@ export class SoopManager {
       ...options,
       auto: false
     });
+
+    new SoopNotify(client, { id, file: options.notifyFile });
 
     this.clients.set(id, {
       client,
@@ -214,7 +217,7 @@ export class SoopManager {
         entry.retryAt = 0;
 
         return true;
-      } catch {
+      } catch (error) {
         entry.error = '연결 실패';
         entry.failures++;
         entry.retryAt =
@@ -225,6 +228,8 @@ export class SoopManager {
         if (signal.aborted || !entry.wanted || this.closed) {
           return false;
         }
+
+        client.emit('error', error);
 
         if (attempt + 1 < this.retries) {
           await new Promise(resolve => {

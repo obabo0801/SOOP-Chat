@@ -40,6 +40,7 @@ export class SoopClient {
     this.controller = null;
     this.cancellation = null;
     this.closed = false;
+    this.signedout = false;
 
     this.init(options);
   }
@@ -173,6 +174,8 @@ export class SoopClient {
     }
 
     if (result.data.RESULT === -11) {
+      this.cookie = result.cookie || this.cookie;
+
       const response = await this.secondLogin(userId, secondPw);
 
       return response;
@@ -194,6 +197,10 @@ export class SoopClient {
       ...this.network.httpOptions,
       cookie: this.cookie
     });
+
+    if (this.info?.IS_LOGIN === 1) {
+      this.signedout = false;
+    }
 
     const value = result.data.RESULT;
 
@@ -227,6 +234,10 @@ export class SoopClient {
       cookie: this.cookie
     });
 
+    if (this.info?.IS_LOGIN === 1) {
+      this.signedout = false;
+    }
+
     const value = result.data.RESULT;
 
     return value;
@@ -241,6 +252,8 @@ export class SoopClient {
       ...this.network.httpOptions,
       cookie: this.cookie
     });
+
+    this.signedout = true;
 
     const connected = this.disconnect();
 
@@ -352,6 +365,8 @@ export class SoopClient {
       if (this.cookie && Number(this.info?.IS_LOGIN) !== 1) {
         throw new Error('인증 오류');
       }
+
+      await this.notify?.prepare();
     }
     else {
       await this.loadAssets();
@@ -499,7 +514,11 @@ export class SoopClient {
           return;
         }
 
-        handler.dispatch(this, packet.parse(data));
+        try {
+          handler.dispatch(this, packet.parse(data));
+        } catch (error) {
+          this.emit('error', error);
+        }
       });
 
       ws.on('error', error => {
@@ -517,6 +536,10 @@ export class SoopClient {
 
           if (this.auto) {
             this.startLive();
+          }
+
+          if (!signal?.aborted) {
+            this.emit('connectionClose', { source: 'chat' });
           }
         }
 
@@ -641,6 +664,8 @@ export class SoopClient {
     this.disconnect(false);
     this.stopLive();
     this.stopContent();
+
+    await this.notify?.close();
 
     await this.connecting?.catch(() => {});
   }
@@ -836,7 +861,7 @@ export class SoopClient {
 
     const channel = await this.sendLiveInfo();
 
-    if (!channel) {
+    if (!channel || channel.RESULT !== 1) {
       return false;
     }
 
@@ -844,14 +869,8 @@ export class SoopClient {
       return false;
     }
 
-    let login = true;
-
-    if (channel.RESULT === -8) {
-      login = false;
-    }
-
     this.emit('session', {
-      login,
+      login: true,
       before: this.channel,
       after: channel
     });
@@ -1165,10 +1184,17 @@ export class SoopClient {
       let result;
 
       try {
-        result = await http.getContent(watch.bjId, id, {
+        const options = {
           ...this.network.httpOptions,
           cookie: this.cookie
-        });
+        };
+
+        if (record.data.type === 'post') {
+          result = await http.getContent(watch.bjId, id, options);
+        }
+        else {
+          result = await http.getVodContent(id, options);
+        }
       } catch (error) {
         record.missing = 0;
         state.pending.add(id);
@@ -1184,8 +1210,13 @@ export class SoopClient {
       }
 
       const { status, data } = result;
+      let removed = result.removed === true;
 
-      if (status === 515 && Number(data?.code) === 1380) {
+      if (record.data.type === 'post') {
+        removed = status === 515 && Number(data?.code) === 1380;
+      }
+
+      if (removed) {
         record.missing++;
 
         if (record.missing < 2) {
@@ -1728,6 +1759,19 @@ export class SoopClient {
       return;
     }
 
+    if (this.channel && data.siMinAge !== undefined) {
+      const age = Number(data.siMinAge);
+      const prev = Number(this.channel.GRADE);
+
+      if (Number.isFinite(age)) {
+        this.channel.GRADE = age;
+
+        if (Number.isFinite(prev) && age !== prev) {
+          this.emit('age', { age, prev });
+        }
+      }
+    }
+
     const prev = this.broadcast;
 
     const next = {
@@ -2217,6 +2261,33 @@ export class SoopClient {
     }
 
     const result = await http.postIceMode(this.channel.BNO, this.userId, type, auth, {
+      ...this.network.httpOptions,
+      cookie: this.cookie
+    });
+
+    return result;
+  }
+
+  async sendNotice(message = '') {
+    if (this.idle || !this.channel?.BNO) {
+      return false;
+    }
+
+    const state = message.trim() ? 1 : 0;
+    const result = await http.postChatNotice(this.channel.BNO, message, state, {
+      ...this.network.httpOptions,
+      cookie: this.cookie
+    });
+
+    return result;
+  }
+
+  async sendRule(message = '', display = 1) {
+    if (this.idle || !this.channel?.BNO) {
+      return false;
+    }
+
+    const result = await http.postRule(message, display, {
       ...this.network.httpOptions,
       cookie: this.cookie
     });

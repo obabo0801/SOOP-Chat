@@ -2,6 +2,7 @@ export { SoopClient } from '#soop/client';
 export { SoopManager } from '#soop/manager';
 export { SoopMacro } from '#soop/macro';
 export { SoopHistory } from '#soop/history';
+export { SoopNotify } from '#soop/notify';
 
 export * as http from '#soop/http';
 export * as packet from '#soop/packet';

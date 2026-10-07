@@ -18,11 +18,6 @@
         </a>
         <img id="emblem" class="emblem" alt="엠블럼" hidden />
         <button id="information" class="information" type="button" title="스트리머 정보">
-          i
-        </button>
-      </div>
-      <div class="menu">
-        <button id="menu" type="button" title="메뉴">
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -30,22 +25,153 @@
             stroke-width="1.5"
             stroke-linecap="round"
           >
-            <path d="M4 6h16M4 12h16M4 18h16" />
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v6M12 7h.01" />
           </svg>
         </button>
-        <div id="menu-items" hidden>
-          <button id="macro-open" type="button">매크로 편집</button>
-          <label class="switch"
-            ><input id="menu-enabled" type="checkbox" />매크로 사용</label
-          >
+      </div>
+      <div class="account-menu">
+        <button id="account" type="button" title="로그인" hidden>
+          <span id="account-label">로그인</span>
+          <img id="account-avatar" alt="내 프로필" hidden />
+        </button>
+        <div class="menu">
+          <button id="menu" type="button" title="메뉴">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            >
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <div id="menu-items" hidden>
+            <button id="macro-open" type="button">매크로 편집</button>
+            <button id="logs-open" type="button">로그 검색</button>
+            <button id="notify-open" type="button">알림 설정</button>
+            <button id="link-copy" type="button" hidden>접속 주소 복사</button>
+            <label class="switch"
+              ><input id="menu-enabled" type="checkbox" />매크로 사용</label
+            >
+          </div>
         </div>
       </div>
     </header>
+    <dialog id="notify">
+      <div class="heading">
+        <h2>알림 설정</h2>
+        <button id="notify-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <form id="notify-form">
+        <label class="switch"><input id="notify-enabled" type="checkbox" />알림 사용</label>
+        <details id="notify-connection">
+          <summary>연결 설정</summary>
+          <label>서버 주소<input id="notify-server" type="text" /></label>
+          <label>알림 채널<input id="notify-topic" type="text" /></label>
+          <label>인증 토큰<input id="notify-token" type="password" autocomplete="off" /></label>
+          <label class="switch"><input id="notify-clear" type="checkbox" />토큰 삭제</label>
+        </details>
+        <div id="notify-events"></div>
+        <div class="notify-detection">
+          <label>키워드<textarea id="notify-keywords" rows="3"></textarea></label>
+          <label>닉네임<textarea id="notify-nicknames" rows="3"></textarea></label>
+        </div>
+        <p id="notify-status" hidden></p>
+        <div class="actions">
+          <button id="notify-test" type="button">테스트 알림</button>
+          <button id="notify-save" type="submit">저장</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="login">
+      <div class="heading">
+        <button id="login-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <h2><img id="login-logo" alt="SOOP 로그인" /></h2>
+      <form id="login-form">
+        <input
+          id="login-id"
+          type="text"
+          placeholder="아이디"
+          autocomplete="username"
+          required
+        />
+        <input
+          id="login-password"
+          type="password"
+          placeholder="비밀번호"
+          autocomplete="current-password"
+          required
+        />
+        <details>
+          <summary>2차 비밀번호</summary>
+          <input
+            id="login-second"
+            type="password"
+            placeholder="2차 비밀번호"
+            autocomplete="off"
+          />
+        </details>
+        <label class="switch"><input id="login-save" type="checkbox" />아이디 저장</label>
+        <p id="login-error" hidden></p>
+        <button id="login-submit" type="submit">로그인</button>
+      </form>
+    </dialog>
     <div id="screen" hidden>
       <div class="player" id="player" tabindex="0">
         <video id="video" autoplay playsinline muted></video>
         <div id="video-subtitle" hidden></div>
         <div id="video-state">오프라인</div>
+        <dialog id="kicks">
+          <div class="heading">
+            <h2>강제 퇴장 인원</h2>
+            <button id="kicks-close" class="close" type="button" title="닫기">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
+          </div>
+          <p id="kicks-status"></p>
+          <div id="kicks-results"></div>
+        </dialog>
+        <dialog id="members">
+          <div class="heading">
+            <h2 id="members-title">채팅 참여 인원 (0명)</h2>
+            <button id="members-close" class="close" type="button" title="닫기">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
+          </div>
+          <input
+            id="members-search"
+            type="search"
+            placeholder="닉네임, 아이디 검색"
+            maxlength="100"
+          />
+          <p id="members-status"></p>
+          <div id="members-list" tabindex="0"></div>
+        </dialog>
         <div class="playback">
           <div id="timeline-preview" hidden>
             <div>
@@ -92,6 +218,43 @@
             <button id="live" type="button" title="라이브 (L)" disabled>라이브</button>
             <span id="clock">00:00</span>
             <div class="video-spacer"></div>
+            <button
+              id="video-clip"
+              class="video-button"
+              type="button"
+              title="유저클립 & 캐치"
+              disabled
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="3" y="4" width="18" height="17" rx="5" />
+                <path d="M3 10h18M7 4l-2 6m7-6-2 6m7-6-2 6" />
+              </svg>
+            </button>
+            <button
+              id="video-save"
+              class="video-button"
+              type="button"
+              title="저장"
+              disabled
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
+              </svg>
+            </button>
             <div class="resolution">
               <button id="quality" type="button" disabled></button>
               <div id="qualities" hidden></div>
@@ -140,9 +303,9 @@
               >
                 <svg viewBox="0 0 24 24">
                   <path
-                    d="m9.2 3-.5 2-1.5.9-2-.6-2.8 4.8 1.5 1.4v1.8l-1.5 1.4 2.8 4.8 2-.6 1.5.9.5 2h5.6l.5-2 1.5-.9 2 .6 2.8-4.8-1.5-1.4v-1.8l1.5-1.4-2.8-4.8-2 .6-1.5-.9-.5-2z"
+                    fill-rule="evenodd"
+                    d="m9.2 3-.5 2-1.5.9-2-.6-2.8 4.8 1.5 1.4v1.8l-1.5 1.4 2.8 4.8 2-.6 1.5.9.5 2h5.6l.5-2 1.5-.9 2 .6 2.8-4.8-1.5-1.4v-1.8l1.5-1.4-2.8-4.8-2 .6-1.5-.9-.5-2zM15 12a3 3 0 1 0-6 0 3 3 0 0 0 6 0"
                   />
-                  <circle cx="12" cy="12" r="3" />
                 </svg>
               </button>
               <div id="settings-menu" hidden>
@@ -197,6 +360,82 @@
           </div>
         </div>
       </div>
+      <div class="broadcast">
+        <div class="broadcast-top">
+          <div class="broadcast-identity">
+            <a id="video-station" target="_blank" rel="noopener noreferrer">
+              <img id="video-portrait" alt="" hidden />
+            </a>
+            <a id="video-name" target="_blank" rel="noopener noreferrer"></a>
+            <img id="video-emblem" class="emblem" alt="엠블럼" hidden />
+            <div class="video-stats">
+              <span id="video-subscription" title="구독">
+                <svg viewBox="0 0 24 24">
+                  <path d="M4 3h13v11a6.5 6.5 0 0 1-13 0zm13 1h2a3 3 0 0 1 0 6h-2" />
+                  <path
+                    d="m10.5 6 1.3 2.6 2.9.4-2.1 2 .5 2.9-2.6-1.4-2.6 1.4.5-2.9-2.1-2 2.9-.4z"
+                  />
+                </svg>
+                <span id="video-subscription-count"></span>
+              </span>
+              <span id="video-favorite" title="즐겨찾기">
+                <svg viewBox="0 0 24 24">
+                  <path d="m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z" />
+                </svg>
+                <span id="video-favorite-count"></span>
+              </span>
+              <span id="video-up" title="UP">
+                <svg viewBox="0 0 24 24">
+                  <path d="M8 10v11H3V10zm0 11h11l2-11h-7l1-6-3-1-4 7" />
+                </svg>
+                <span id="video-up-count"></span>
+              </span>
+            </div>
+          </div>
+          <div class="video-actions">
+            <button id="kicks-open" type="button" title="강제 퇴장 인원" disabled>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <circle cx="9" cy="7" r="3" />
+                <path d="M3 20v-2a6 6 0 0 1 12 0v2m2-12 5 5m0-5-5 5" />
+              </svg>
+            </button>
+            <button id="members-open" type="button" title="채팅 참여 인원" disabled>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <circle cx="9" cy="8" r="3" />
+                <path
+                  d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m1 3a5 5 0 0 1 4 5"
+                />
+              </svg>
+              <span id="members-count">0</span>
+            </button>
+            <span class="broadcast-separator">·</span>
+            <span id="video-duration"></span>
+          </div>
+        </div>
+        <div class="video-title">
+          <span id="video-password" title="비밀 방송" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="4" y="10" width="16" height="12" rx="2" />
+              <path d="M7 10V7a5 5 0 0 1 10 0v3m-5 4v4" />
+            </svg>
+          </span>
+          <span id="video-adult" title="19세 이상 방송" hidden>19</span>
+          <h2 id="video-title">
+            <a id="video-broadcast" target="_blank" rel="noopener noreferrer"></a>
+          </h2>
+        </div>
+        <div id="video-tags"></div>
+      </div>
     </div>
     <section id="conversation" hidden>
       <div class="chat-stream">
@@ -227,7 +466,7 @@
         </button>
         <button id="chat-poll-open" type="button" hidden>
           <span>☑</span>
-          새 투표가 시작되었습니다.
+          <span id="chat-poll-label">새 투표가 시작되었습니다.</span>
         </button>
       </div>
       <div class="chat-composer">
@@ -235,7 +474,14 @@
           <div class="heading">
             <h2>매니저 채팅</h2>
             <button id="chat-manager-close" class="close" type="button" title="닫기">
-              ×
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
             </button>
           </div>
           <div id="chat-manager-log"></div>
@@ -254,10 +500,21 @@
           <button id="chat-sticker" type="button" title="OGQ 제거" hidden>
             <img id="chat-sticker-image" alt="" />
           </button>
+          <button id="chat-manage-open" type="button" title="채팅 관리" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 4a8 8 0 0 1 0 16H9l-4 2v-6" />
+              <g transform="translate(-1 -1) scale(.6)">
+                <path
+                  d="m9.2 3-.5 2-1.5.9-2-.6-2.8 4.8 1.5 1.4v1.8l-1.5 1.4 2.8 4.8 2-.6 1.5.9.5 2h5.6l.5-2 1.5-.9 2 .6 2.8-4.8-1.5-1.4v-1.8l1.5-1.4-2.8-4.8-2 .6-1.5-.9-.5-2Z"
+                />
+                <circle cx="12" cy="12" r="3" />
+              </g>
+            </svg>
+          </button>
           <button id="chat-manager-open" type="button" title="매니저 채팅" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M4 4h16v12H9l-5 4V4Z" />
-              <path d="M8 8h8M8 12h5" />
+              <path d="M12 3a8 8 0 0 1 0 16H9l-4 3v-6a8 8 0 0 1 7-13Z" />
+              <path d="M8 15V8l4 4 4-4v7" />
             </svg>
           </button>
           <textarea
@@ -265,11 +522,25 @@
             rows="1"
             placeholder="로그인이 필요합니다."
             disabled
+            hidden
           ></textarea>
+          <div
+            id="chat-compose"
+            role="textbox"
+            contenteditable="false"
+            data-placeholder="로그인이 필요합니다."
+          ></div>
           <button id="chat-emoticon" type="button" title="이모티콘" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="12" cy="12" r="9" />
               <path d="M8 14c1 4 7 4 8 0M8 9h1m6 0h1" />
+            </svg>
+          </button>
+          <button id="chat-menu-open" type="button" title="더 보기">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.7" />
+              <circle cx="12" cy="12" r="1.7" />
+              <circle cx="19" cy="12" r="1.7" />
             </svg>
           </button>
           <button id="chat-submit" type="submit" disabled>전송</button>
@@ -280,15 +551,205 @@
       <form id="chat-poll-form">
         <div class="heading">
           <h2>투표하기</h2>
-          <button id="chat-poll-close" class="close" type="button" title="닫기">×</button>
+          <button id="chat-poll-close" class="close" type="button" title="닫기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
         </div>
         <p id="chat-poll-title"></p>
         <div id="chat-poll-list"></div>
-        <p id="chat-poll-status"></p>
         <div class="chat-poll-buttons">
           <button id="chat-poll-cancel" type="button">취소</button>
           <button id="chat-poll-submit" type="submit" disabled>투표 완료</button>
         </div>
+      </form>
+    </dialog>
+    <dialog id="chat-poll-notice">
+      <div class="heading">
+        <h2>투표 안내</h2>
+        <button id="chat-poll-notice-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <p id="chat-poll-message"></p>
+      <button id="chat-poll-notice-confirm" type="button">확인</button>
+    </dialog>
+    <dialog id="chat-manage">
+      <div class="heading">
+        <h2>채팅 관리</h2>
+        <button id="chat-manage-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <div class="chat-icon-tabs">
+        <button id="chat-freeze-tab" class="selected" type="button">얼리기</button>
+        <button id="chat-slow-tab" type="button">저속 모드</button>
+        <button id="chat-notice-open" type="button">스트리머 공지</button>
+        <button id="chat-rule-open" type="button">채팅 규칙</button>
+      </div>
+      <section id="chat-freezing">
+        <div id="chat-grades">
+          <label><input type="checkbox" checked disabled />스트리머</label>
+          <label><input type="checkbox" />팬클럽</label>
+          <label><input type="checkbox" />서포터</label>
+          <label><input type="checkbox" />열혈팬</label>
+          <label><input type="checkbox" />구독팬</label>
+          <label><input type="checkbox" checked />매니저</label>
+        </div>
+        <label for="chat-freeze-count">선물 개수</label>
+        <input id="chat-freeze-count" type="number" min="1" max="10000" value="1" />
+        <label for="chat-freeze-month">구독 개월</label>
+        <input id="chat-freeze-month" type="number" min="1" step="1" value="1" />
+        <div class="chat-setting-row">
+          <button id="chat-freeze" type="button">얼리기</button>
+          <button id="chat-melt" type="button">녹이기</button>
+        </div>
+      </section>
+      <form id="chat-slow" hidden>
+        <label for="chat-slow-count">저속 모드 (초)</label>
+        <div class="chat-setting-row">
+          <input id="chat-slow-count" type="number" min="0" step="1" value="0" required />
+          <button type="submit">적용</button>
+          <button id="chat-slow-off" type="button">해제</button>
+        </div>
+      </form>
+      <section id="chat-announcement" hidden>
+        <form id="chat-announcement-form">
+          <textarea id="chat-announcement-content" rows="5" maxlength="2000"></textarea>
+          <button type="submit">저장</button>
+        </form>
+      </section>
+      <section id="chat-rule-edit" hidden>
+        <form id="chat-rule-form">
+          <textarea id="chat-rule-input" rows="5" maxlength="2000"></textarea>
+          <button type="submit">저장</button>
+        </form>
+      </section>
+    </dialog>
+    <dialog id="chat-multi" class="chat-option">
+      <div class="heading">
+        <h2>멀티 모드</h2>
+        <button id="chat-multi-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <form id="chat-multi-form">
+        <label for="chat-multi-count">접속 개수</label>
+        <div class="chat-setting-row">
+          <input
+            id="chat-multi-count"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            required
+          />
+          <button id="chat-multi-start" type="submit">시작</button>
+          <button id="chat-multi-stop" type="button" disabled>정지</button>
+        </div>
+      </form>
+      <p id="chat-multi-summary"></p>
+      <div id="chat-multi-list"></div>
+    </dialog>
+    <dialog id="chat-menu">
+      <div class="heading">
+        <h2>더 보기</h2>
+        <button id="chat-menu-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <div class="chat-setting-menu">
+        <button id="chat-display-open" type="button">이모티콘 표시</button>
+        <button id="chat-nickname-open" type="button">닉네임 변경</button>
+        <button id="chat-entry-open" type="button">입장 표시</button>
+        <button id="chat-translation-open" type="button">채팅 번역</button>
+        <button id="chat-clear" type="button">채팅 지우기</button>
+        <button id="chat-popup" type="button">채팅 팝업</button>
+        <button id="chat-size-open" type="button">채팅 크기</button>
+        <button id="chat-multi-open" type="button">멀티 모드</button>
+      </div>
+    </dialog>
+    <dialog id="chat-display" class="chat-option">
+      <div class="heading">
+        <h2>이모티콘 표시</h2>
+        <button id="chat-display-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <div class="chat-setting-menu">
+        <label class="switch"><input id="chat-show-emotes" type="checkbox" checked />이모티콘 보기</label>
+        <label class="switch"><input id="chat-move-emotes" type="checkbox" checked />이모티콘 움직이기</label>
+        <label class="switch"><input id="chat-small-ogq" type="checkbox" />OGQ 이모티콘 작게</label>
+      </div>
+    </dialog>
+    <dialog id="chat-entry" class="chat-option">
+      <div class="heading">
+        <h2>입장 표시</h2>
+        <button id="chat-entry-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <label class="switch"><input id="chat-show-entry" type="checkbox" checked />입장 표시</label>
+    </dialog>
+    <dialog id="chat-translation" class="chat-option">
+      <div class="heading">
+        <h2>채팅 번역</h2>
+        <button id="chat-translation-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <label class="switch"><input id="chat-translate" type="checkbox" />채팅 번역</label>
+    </dialog>
+    <dialog id="chat-size" class="chat-option">
+      <div class="heading">
+        <h2>채팅 크기</h2>
+        <button id="chat-size-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <div class="chat-size-control">
+        <button id="chat-size-down" type="button" title="작게">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M6 12h12" />
+          </svg>
+        </button>
+        <output id="chat-size-value">2</output>
+        <button id="chat-size-up" type="button" title="크게">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M6 12h12M12 6v12" />
+          </svg>
+        </button>
+      </div>
+    </dialog>
+    <dialog id="chat-nickname" class="chat-option">
+      <div class="heading">
+        <h2>닉네임 변경</h2>
+        <button id="chat-nickname-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <form id="chat-nickname-form">
+        <input id="chat-nickname-input" type="text" placeholder="닉네임" />
+        <button type="submit">변경</button>
       </form>
     </dialog>
     <dialog id="chat-rule">
@@ -300,7 +761,11 @@
             <h2>채팅규칙</h2>
           </div>
         </div>
-        <button id="chat-rule-close" class="close" type="button" title="닫기">×</button>
+        <button id="chat-rule-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
       </div>
       <div id="chat-rule-content"></div>
       <button id="chat-rule-agree" type="button">규칙에 동의합니다!</button>
@@ -316,7 +781,11 @@
           <img id="chat-avatar" alt="프로필" hidden />
           <div><b id="chat-name"></b><small id="chat-id"></small></div>
         </a>
-        <button id="chat-person-close" class="close" type="button" title="닫기">×</button>
+        <button id="chat-person-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
       </div>
       <div id="chat-subscription" hidden></div>
       <div id="chat-person-actions"></div>
@@ -332,7 +801,9 @@
           <h2>소통</h2>
         </div>
         <button id="chat-communication-close" class="close" type="button" title="닫기">
-          ×
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
         </button>
       </div>
       <button id="chat-whisper" type="button">귓속말 보내기</button>
@@ -340,7 +811,11 @@
     <dialog id="chat-icons">
       <div class="heading">
         <h2>이모티콘</h2>
-        <button id="chat-icons-close" class="close" type="button" title="닫기">×</button>
+        <button id="chat-icons-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
       </div>
       <div class="chat-icon-tabs">
         <button id="chat-icons-emoticon" class="selected" type="button">이모티콘</button>
@@ -365,27 +840,6 @@
             type="button"
             title="스트리머 정보"
           >
-            i
-          </button>
-        </div>
-        <button id="chat-history-close" class="close" type="button" title="닫기">
-          ×
-        </button>
-      </div>
-      <div id="chat-history-log"></div>
-      <button id="chat-history-more" type="button" hidden>이전 채팅</button>
-    </dialog>
-    <p id="status" role="status"></p>
-    <dialog id="macros" data-page="list">
-      <div class="heading">
-        <div class="actions">
-          <button id="macro-back" type="button">목록</button>
-          <h2>매크로</h2>
-        </div>
-        <div class="actions">
-          <label class="switch"><input id="enabled" type="checkbox" />매크로 사용</label>
-          <button id="save" class="primary" type="button" disabled>저장</button>
-          <button id="macro-close" class="close" type="button" title="닫기">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -393,10 +847,100 @@
               stroke-width="1.5"
               stroke-linecap="round"
             >
-              <path d="m6 6 12 12M18 6 6 18" />
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v6M12 7h.01" />
             </svg>
           </button>
         </div>
+        <button id="chat-history-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <div id="chat-history-log"></div>
+    </dialog>
+    <p id="status" role="status"></p>
+    <dialog id="logs">
+      <div class="heading">
+        <h2>로그 검색</h2>
+        <button id="logs-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
+      </div>
+      <form id="logs-form">
+        <div class="logs-filters">
+          <label
+            >날짜
+            <select id="logs-period">
+              <option value="today">오늘</option>
+              <option value="yesterday">어제</option>
+              <option value="week">최근 7일</option>
+              <option value="custom">직접 선택</option>
+            </select>
+          </label>
+          <label>시작<input id="logs-start" type="date" required /></label>
+          <label>종료<input id="logs-end" type="date" required /></label>
+          <label
+            >종류
+            <select id="logs-type">
+              <option value="all">전체</option>
+              <option value="chat">채팅</option>
+              <option value="manager" id="logs-manager">매니저 채팅</option>
+              <option value="system">알림</option>
+              <option value="gift">후원</option>
+              <option value="mute">채금</option>
+              <option value="kick">강퇴</option>
+            </select>
+          </label>
+        </div>
+        <div class="logs-query">
+          <input
+            id="logs-query"
+            type="search"
+            placeholder="닉네임, 아이디, 내용"
+            maxlength="200"
+          />
+          <button type="submit">검색</button>
+        </div>
+      </form>
+      <p id="logs-status"></p>
+      <div id="logs-results"></div>
+    </dialog>
+    <dialog id="macros" data-page="list">
+      <div class="heading">
+        <div class="actions">
+          <button id="macro-back" type="button" title="목록">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="m14 6-6 6 6 6" />
+            </svg>
+          </button>
+          <h2>매크로</h2>
+        </div>
+        <div class="actions macro-controls">
+          <label class="switch"><input id="enabled" type="checkbox" />매크로 사용</label>
+          <button id="save" type="button" disabled>저장</button>
+        </div>
+        <button id="macro-close" class="close" type="button" title="닫기">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+          >
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
+        </button>
       </div>
       <p id="macro-status" role="status"></p>
       <main>
@@ -419,10 +963,12 @@
                   ><input id="active" type="checkbox" />이 규칙 사용</label
                 >
                 <span class="divider"></span>
-                <button id="up" type="button">위로</button
-                ><button id="down" type="button">아래로</button>
-                <button id="duplicate" type="button">복사</button
-                ><button id="remove" type="button">삭제</button>
+                <div class="actions macro-tools">
+                  <button id="up" type="button">위로</button
+                  ><button id="down" type="button">아래로</button>
+                  <button id="duplicate" type="button">복사</button
+                  ><button id="remove" type="button">삭제</button>
+                </div>
               </div>
             </div>
             <div class="columns">
@@ -476,6 +1022,8 @@
               >동작<select id="action">
                 <option value="reply">답변</option>
                 <option value="roulette">룰렛</option>
+                <option value="multi">멀티 모드</option>
+                <option value="notify">알림</option>
                 <option value="warn">경고</option>
                 <option value="mute">채금</option>
                 <option value="kick">강퇴</option>

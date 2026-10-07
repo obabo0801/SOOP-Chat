@@ -22,7 +22,11 @@ export function parseEnv(name, show = true) {
         'USERID=""',
         'PASSWORD=""',
         'SECONDPW=""',
-        'WEFLAB=""'
+        'WEFLAB=""',
+        '',
+        'HOST="127.0.0.1"',
+        'PORT="0"',
+        'ORIGINS=""'
       ].join('\n') + '\n';
 
     try {

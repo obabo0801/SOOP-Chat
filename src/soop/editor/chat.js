@@ -1,6 +1,8 @@
 import { DOMAIN } from '/config.js';
 
-const $ = id => document.getElementById(id);
+let popup;
+
+const $ = id => document.getElementById(id) || popup?.document.getElementById(id);
 
 function image(url, title = '') {
   if (!url) {
@@ -30,11 +32,11 @@ function image(url, title = '') {
   return img;
 }
 
-function content(node, message, emoticons = []) {
+function content(node, message, emoticons = [], enabled = true) {
   const parts = String(message).split(/(\/[^/\s]+\/)/g);
 
   for (const part of parts) {
-    const icon = emoticons.find(item => item.keyword === part);
+    const icon = enabled && emoticons.find(item => item.keyword === part);
     const img = icon && image(icon.smallUrl || icon.url, part);
 
     if (img) {
@@ -47,10 +49,100 @@ function content(node, message, emoticons = []) {
   }
 }
 
+function notification(node, message, emoticons) {
+  const text = String(message);
+  const match = text.match(/채팅금지 횟수 초과|채팅 금지|강제 퇴장|블랙리스트/);
+
+  if (!match) {
+    content(node, text, emoticons);
+
+    return;
+  }
+
+  const warning = document.createElement('strong');
+
+  warning.className = 'chat-warning';
+  warning.textContent = match[0];
+  content(node, text.slice(0, match.index), emoticons);
+  node.append(warning);
+  content(node, text.slice(match.index + match[0].length), emoticons);
+}
+
+function donation(node, message, emoticons) {
+  const text = String(message);
+  const match = text.match(/[\d,]+(?=개|개월)/);
+
+  if (!match) {
+    content(node, text, emoticons);
+
+    return;
+  }
+
+  const count = document.createElement('strong');
+
+  count.className = 'chat-count';
+  count.textContent = match[0];
+  content(node, text.slice(0, match.index), emoticons);
+  node.append(count);
+  content(node, text.slice(match.index + match[0].length), emoticons);
+}
+
 function subscription(user) {
   const tier = user.tierName || (user.tier === 2 ? '플러스' : '베이직');
 
   return `${tier} | 누적 ${user.total || 0}개월`;
+}
+
+function day(date) {
+  return date.toLocaleDateString('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+}
+
+function divider(node, previous) {
+  const date = node.dataset.date;
+
+  if (!date || date === previous?.dataset.date) {
+    return null;
+  }
+
+  const line = document.createElement('div');
+  const today = new Date();
+  const yesterday = new Date(today);
+
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  line.className = 'chat-date';
+  line.textContent = date;
+
+  if (date === day(today)) {
+    line.textContent = '오늘';
+  }
+  else if (date === day(yesterday)) {
+    line.textContent = '어제';
+  }
+
+  return line;
+}
+
+function dates(log) {
+  for (const line of log.querySelectorAll('.chat-date')) {
+    line.remove();
+  }
+
+  let previous;
+
+  for (const node of log.querySelectorAll('.chat-row:not([hidden])')) {
+    const line = divider(node, previous);
+
+    if (line) {
+      node.before(line);
+    }
+
+    previous = node;
+  }
 }
 
 function identify(node, user) {
@@ -144,6 +236,7 @@ export function createChat(token, inspect) {
   const users = new Map();
   const log = $('chat-log');
   const input = $('chat-input');
+  const compose = $('chat-compose');
   const jump = $('chat-bottom');
   const preview = $('chat-latest');
   const video = $('video');
@@ -152,6 +245,14 @@ export function createChat(token, inspect) {
   const panel = $('chat-manager');
   const messages = $('chat-manager-log');
   const draft = $('chat-manager-input');
+  const entries = new WeakMap();
+  const settings = { emotes: true, motion: true, small: false, entry: true, size: 2 };
+  let cleared = 0;
+  let translating = false;
+  let queue = Promise.resolve();
+  let queued = 0;
+  let caret = 0;
+  let composing = false;
   let previous = '';
   let pending = false;
   let submitted = false;
@@ -160,6 +261,7 @@ export function createChat(token, inspect) {
   let state = {};
   let cursor = '';
   let loading = false;
+  let epoch = 0;
   let person;
   let viewer;
   let target = '';
@@ -167,6 +269,19 @@ export function createChat(token, inspect) {
   let stickers = [];
   let sticker = null;
   let older = '';
+  let collection = 0;
+  let collecting = false;
+  let searching = false;
+  let search = 0;
+  let kicks = 0;
+  let members = 0;
+  let listing = false;
+  let memberCursor = '';
+  let memberRole = '';
+  let memberQuery = '';
+  let memberTimer;
+  let continuation = '';
+  let query;
   let streaming = false;
   let disconnected = false;
   let sending = false;
@@ -174,11 +289,238 @@ export function createChat(token, inspect) {
   let channel = '';
   let controller;
   let agreed = '';
+  let dismissed = false;
   let survey = null;
   let voting = false;
   let pinned = true;
   let offset = 0;
   let frame;
+  const commands = [
+    ['/지우기', '채팅 지우기'],
+    ['/닉네임', '닉네임 변경'],
+    ['/귓속말', '아이디 내용'],
+    ['/매니저', '매니저 채팅 내용'],
+    ['/채금', '아이디'],
+    ['/강퇴', '아이디'],
+    ['/강퇴취소', '아이디'],
+    ['/번역', '번역할 내용'],
+    ['/크기', '1 ~ 5'],
+    ['/팝업', '채팅 팝업'],
+    ['/멀티', '멀티 모드'],
+    ['/도움말', '명령어 목록']
+  ];
+  const suggestions = document.createElement('div');
+
+  suggestions.id = 'chat-commands';
+  suggestions.hidden = true;
+  $('chat-send').after(suggestions);
+
+  const commandList = () => {
+    const value = input.value.trimStart();
+    const keyword = value.split(/\s/)[0];
+    const emoticon = icons.some(icon => value.startsWith(icon.keyword));
+
+    suggestions.replaceChildren();
+    suggestions.hidden = !value.startsWith('/') || emoticon || /\s/.test(value);
+
+    if (suggestions.hidden) {
+      return;
+    }
+
+    for (const [name, label] of commands.filter(([name]) => name.startsWith(keyword))) {
+      const button = document.createElement('button');
+
+      button.type = 'button';
+      button.textContent = `${name}  ${label}`;
+      button.addEventListener('click', () => {
+        input.value = `${name} `;
+        caret = input.value.length;
+        render(true);
+      });
+      suggestions.append(button);
+    }
+
+    if (!suggestions.children.length) {
+      suggestions.textContent = '지원하지 않는 명령어입니다.';
+    }
+  };
+
+  try {
+    const saved = JSON.parse(window.localStorage.getItem('chat-display') || '{}');
+
+    for (const key of ['emotes', 'motion', 'small', 'entry']) {
+      if (typeof saved[key] === 'boolean') {
+        settings[key] = saved[key];
+      }
+    }
+
+    if (Number.isInteger(saved.size) && saved.size >= 1 && saved.size <= 5) {
+      settings.size = saved.size;
+    }
+  } catch {}
+
+  const text = node => {
+    if (node.nodeType === window.Node.TEXT_NODE) {
+      return node.textContent;
+    }
+
+    if (node.nodeName === 'IMG') {
+      return node.alt;
+    }
+
+    if (node.nodeName === 'BR') {
+      return node.dataset.tail ? '' : '\n';
+    }
+
+    const value = [...node.childNodes].map(text).join('');
+
+    return value;
+  };
+
+  const selection = () => {
+    const selected = compose.ownerDocument.getSelection();
+
+    if (!selected.rangeCount || !compose.contains(selected.anchorNode)) {
+      return null;
+    }
+
+    const range = selected.getRangeAt(0);
+    const before = range.cloneRange();
+
+    before.selectNodeContents(compose);
+    before.setEnd(range.startContainer, range.startOffset);
+    caret = text(before.cloneContents()).length;
+
+    return range;
+  };
+
+  const render = (focus = false) => {
+    compose.replaceChildren();
+
+    const parts = input.value.split(/(\/[^/\s]+\/)/g);
+
+    for (const part of parts) {
+      const icon = icons.find(item => item.keyword === part);
+      const url = icon?.smallUrl || icon?.url;
+
+      if (!url || !url.startsWith('https://')) {
+        compose.append(document.createTextNode(part));
+        continue;
+      }
+
+      const img = document.createElement('img');
+
+      img.src = url;
+      img.alt = part;
+      img.title = part;
+      img.className = 'chat-emote';
+      img.contentEditable = 'false';
+      compose.append(img);
+    }
+
+    if (input.value.endsWith('\n')) {
+      const tail = document.createElement('br');
+
+      tail.dataset.tail = 'true';
+      compose.append(tail);
+    }
+
+    commandList();
+
+    if (!focus) {
+      return;
+    }
+
+    const selected = compose.ownerDocument.getSelection();
+    const range = document.createRange();
+    let offset = Math.min(caret, input.value.length);
+
+    range.selectNodeContents(compose);
+    range.collapse(false);
+
+    for (const node of compose.childNodes) {
+      const length = text(node).length;
+
+      if (offset <= length) {
+        if (node.nodeType === window.Node.TEXT_NODE) {
+          range.setStart(node, offset);
+        }
+        else if (offset === 0) {
+          range.setStartBefore(node);
+        }
+        else {
+          range.setStartAfter(node);
+        }
+
+        range.collapse(true);
+        break;
+      }
+
+      offset -= length;
+    }
+
+    compose.focus();
+    selected.removeAllRanges();
+    selected.addRange(range);
+  };
+
+  const insert = (value, focus = true) => {
+    const range = selection();
+    const end = caret + (range ? text(range.cloneContents()).length : 0);
+
+    input.value = input.value.slice(0, caret) + value + input.value.slice(end);
+    caret += value.length;
+    render(focus);
+  };
+
+  const inline = () => {
+    input.value = text(compose);
+    selection();
+    commandList();
+
+    if (composing) {
+      return;
+    }
+
+    const expected = [...input.value.matchAll(/\/[^/\s]+\//g)]
+      .map(match => match[0])
+      .filter(keyword => icons.some(icon => icon.keyword === keyword));
+    const current = [...compose.querySelectorAll('img')].map(img => img.alt);
+
+    if (JSON.stringify(expected) !== JSON.stringify(current)) {
+      render(true);
+    }
+  };
+
+  compose.addEventListener('input', inline);
+  compose.addEventListener('compositionstart', () => {
+    composing = true;
+  });
+  compose.addEventListener('compositionend', () => {
+    composing = false;
+    inline();
+  });
+  compose.addEventListener('paste', event => {
+    event.preventDefault();
+    insert(event.clipboardData.getData('text/plain').replace(/\r\n/g, '\n'));
+  });
+  for (const type of ['copy', 'cut']) {
+    compose.addEventListener(type, event => {
+      const range = selection();
+
+      if (!range || range.collapsed) {
+        return;
+      }
+
+      event.preventDefault();
+      event.clipboardData.setData('text/plain', text(range.cloneContents()));
+
+      if (type === 'cut') {
+        insert('');
+      }
+    });
+  }
+  document.addEventListener('selectionchange', selection);
 
   const subtitle = () => {
     const caption = captions.findLast(item => {
@@ -202,6 +544,16 @@ export function createChat(token, inspect) {
   }
 
   const rules = () => {
+    if (!state.login) {
+      return false;
+    }
+
+    if (dismissed) {
+      dismissed = false;
+
+      return false;
+    }
+
     if (!state.rule || agreed === state.rule) {
       return false;
     }
@@ -276,7 +628,7 @@ export function createChat(token, inspect) {
     const text = document.createElement('span');
 
     text.className = 'chat-snippet';
-    content(text, entry.message, entry.emoticons);
+    content(text, entry.heading || entry.message, entry.emoticons);
 
     if (entry.image) {
       const img = image(entry.image);
@@ -291,7 +643,7 @@ export function createChat(token, inspect) {
     jump.classList.add('chat-unread');
   };
 
-  const status = message => {
+  const status = (message, error = true) => {
     if (!message) {
       return;
     }
@@ -299,18 +651,70 @@ export function createChat(token, inspect) {
     append({
       id: crypto.randomUUID(),
       date: new Date().toISOString(),
-      type: 'system',
+      type: error ? 'error' : 'system',
       message
     });
   };
 
+  const freezing = () => {
+    const grades = $('chat-grades').querySelectorAll('input');
+
+    grades[0].disabled = true;
+    grades[5].disabled = !state.streamer;
+    $('chat-freeze-count').disabled = !state.streamer || !grades[1].checked;
+    $('chat-freeze-month').disabled = !state.streamer || !grades[4].checked;
+  };
+
   const access = value => {
+    const phase = state.poll?.status !== value.poll?.status;
     const changed =
       state.manager !== value.manager
       || state.streamer !== value.streamer
       || state.login !== value.login;
 
     state = value;
+
+    const account = state.login ? String(state.userId || '').replace(/\(\d+\)$/, '') : '';
+
+    if ($('account').dataset.id !== account) {
+      $('account').dataset.id = account;
+      $('account').classList.toggle('logged-in', Boolean(account));
+      $('account').title = account ? '내 프로필' : '로그인';
+      $('account-label').textContent = account ? state.userName || account : '로그인';
+      $('account-avatar').hidden = true;
+      $('account-avatar').removeAttribute('src');
+
+      if (account) {
+        void request(`/api/user?id=${encodeURIComponent(account)}`)
+          .then(data => {
+            const avatar = image(data.image);
+
+            if ($('account').dataset.id === account && avatar) {
+              $('account-avatar').src = avatar.src;
+              $('account-avatar').hidden = false;
+            }
+          })
+          .catch(() => {});
+      }
+    }
+
+    if (state.viewers !== null && state.viewers !== undefined) {
+      $('members-count').textContent = Number(state.viewers).toLocaleString('ko-KR');
+    }
+
+    $('members-open').disabled = !state.connected;
+
+    if (!state.connected) {
+      $('members').close();
+      $('members-list').replaceChildren();
+    }
+    $('kicks-open').disabled = !state.connected || !state.kicks;
+
+    if (!state.connected) {
+      $('kicks').close();
+      $('kicks-results').replaceChildren();
+    }
+
     $('captions').classList.toggle('active', state.subtitle >= 0);
     $('captions').dataset.subtitle = state.subtitle ?? -1;
     $('subtitle-label').textContent = state.languages?.[state.subtitle]?.label || 'OFF';
@@ -339,9 +743,26 @@ export function createChat(token, inspect) {
 
     subtitle();
     $('chat-poll-open').hidden = !state.poll;
+
+    const polls = {
+      1: '새 투표가 시작되었습니다.',
+      3: '투표가 마감되었습니다.',
+      4: '투표 결과가 공개되었습니다.'
+    };
+
+    $('chat-poll-open').title = polls[state.poll?.status] || '';
+    $('chat-poll-label').textContent = polls[state.poll?.status] || '';
+
+    if (state.poll?.status !== 1) {
+      $('chat-poll-submit').disabled = true;
+
+      for (const radio of $('chat-poll-list').querySelectorAll('input')) {
+        radio.disabled = true;
+      }
+    }
     position();
 
-    if (survey !== state.poll?.surveyNo) {
+    if (phase || survey !== state.poll?.surveyNo) {
       survey = null;
 
       if ($('chat-poll').open) {
@@ -353,6 +774,25 @@ export function createChat(token, inspect) {
     $('chat-emoticon').disabled = !state.login;
     $('chat-icons-ogq').disabled = !state.login || Boolean(target);
     $('chat-manager-open').hidden = !state.manager;
+    $('chat-manage-open').hidden = !state.manager;
+    $('chat-manage-open').disabled = !state.connected;
+    $('chat-freeze').textContent = state.ice ? '적용' : '얼리기';
+    $('chat-melt').disabled = !state.ice;
+    freezing();
+    if (document.activeElement !== $('chat-slow-count')) {
+      $('chat-slow-count').value = state.slow || 0;
+    }
+    $('chat-notice-open').disabled = !state.streamer || !state.connected;
+    $('chat-rule-open').disabled = !state.streamer || !state.connected;
+    $('chat-nickname-open').disabled = !state.login || !state.connected;
+
+    if (!state.manager || !state.connected) {
+      $('chat-manage').close();
+    }
+
+    if (!state.login || !state.connected) {
+      $('chat-nickname').close();
+    }
     draft.disabled = !state.manager || !state.connected;
     $('chat-manager-submit').disabled = draft.disabled;
 
@@ -360,7 +800,8 @@ export function createChat(token, inspect) {
       reset();
     }
     $('chat-whisper').disabled = !state.login;
-    input.placeholder = state.login ? '채팅 입력' : '로그인이 필요합니다.';
+    compose.contentEditable = String(!input.disabled);
+    compose.dataset.placeholder = state.login ? '채팅 입력' : '로그인이 필요합니다.';
 
     if (!state.login) {
       sticker = null;
@@ -388,14 +829,25 @@ export function createChat(token, inspect) {
     if (changed && $('chat-person').open && person) {
       actions();
     }
+
+    $('account').hidden = false;
   };
 
   const row = entry => {
     const node = document.createElement('article');
+    const date = new Date(entry.date);
+    const emoticons = settings.emotes ? entry.emoticons : [];
 
     node.className = `chat-row chat-${entry.type}`;
+    entries.set(node, entry);
+    node.hidden = !settings.entry && entry.type === 'system'
+      && /님이 대화방(?:에 참여했습니다|에서 나가셨습니다)\./.test(entry.message);
     node.dataset.id = entry.id;
-    node.title = new Date(entry.date).toLocaleTimeString('ko-KR');
+    node.title = date.toLocaleTimeString('ko-KR');
+
+    if (!Number.isNaN(date.getTime())) {
+      node.dataset.date = day(date);
+    }
 
     if (entry.type === 'subtitle') {
       node.textContent = `[자막] ${entry.message}`;
@@ -403,8 +855,23 @@ export function createChat(token, inspect) {
       return node;
     }
 
-    if (entry.type === 'system' && !entry.user?.id) {
-      node.textContent = entry.message;
+    if (['system', 'error'].includes(entry.type) && !entry.user?.id) {
+      if (entry.type === 'system') {
+        const heading = document.createElement('strong');
+        const message = document.createElement('span');
+
+        node.dataset.tone = entry.tone || '';
+        content(heading, entry.heading || entry.message, emoticons);
+        node.append(heading);
+
+        if (entry.heading && entry.message) {
+          content(message, entry.message, emoticons);
+          node.append(document.createElement('br'), message);
+        }
+      }
+      else {
+        notification(node, entry.message, emoticons);
+      }
 
       return node;
     }
@@ -413,10 +880,21 @@ export function createChat(token, inspect) {
     const cached = users.get(user.id);
 
     if (cached && user.tier && !user.month) {
-      Object.assign(user, cached);
+      const { month, total, tierUrl, tierName } = cached;
+
+      Object.assign(user, { month, total, tierUrl, tierName });
     }
 
     node.dataset.role = user.role || '';
+
+    if (entry.type === 'gift') {
+      if (entry.message.includes('애드벌룬')) {
+        node.dataset.gift = 'adcon';
+      }
+      else if (entry.message.includes('별풍선')) {
+        node.dataset.gift = 'balloon';
+      }
+    }
 
     if (entry.type === 'system') {
       const message = document.createElement('span');
@@ -426,7 +904,7 @@ export function createChat(token, inspect) {
       message.dataset.user = user.id;
       message.dataset.tier = user.tier || 0;
       identify(message, user);
-      content(message, entry.message, entry.emoticons);
+      notification(message, entry.message, emoticons);
       node.append(message);
       node.tabIndex = 0;
       node.addEventListener('click', () => void open(user));
@@ -451,11 +929,16 @@ export function createChat(token, inspect) {
     identity.addEventListener('click', () => void open(user));
     node.append(identity);
 
-    if (entry.image) {
+    if (entry.image && (entry.type !== 'ogq' || settings.emotes)) {
       const img = image(entry.image);
 
       if (img) {
         img.className = 'chat-image';
+
+        if (entry.type === 'gift') {
+          node.classList.add('chat-gift-image');
+          img.addEventListener('error', () => node.classList.remove('chat-gift-image'));
+        }
 
         if (entry.type === 'ogq') {
           const path = new URL(img.src).pathname.match(/^\/sticker\/([^/]+)\//);
@@ -488,8 +971,41 @@ export function createChat(token, inspect) {
     const text = document.createElement('span');
 
     text.className = 'chat-message';
-    content(text, entry.message, entry.emoticons);
+
+    if (entry.type === 'gift') {
+      donation(text, entry.message, emoticons);
+    }
+    else {
+      content(text, entry.message, emoticons, settings.emotes);
+    }
+
     node.append(text);
+
+    if (!settings.motion) {
+      for (const img of node.querySelectorAll('.chat-emote, .chat-ogq .chat-image')) {
+        const freeze = () => {
+          if (!img.naturalWidth || !img.parentNode) {
+            return;
+          }
+
+          const canvas = document.createElement('canvas');
+
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.className = img.className;
+          canvas.title = img.title;
+          canvas.getContext('2d').drawImage(img, 0, 0);
+          img.replaceWith(canvas);
+        };
+
+        if (img.complete) {
+          freeze();
+        }
+        else {
+          img.addEventListener('load', freeze, { once: true });
+        }
+      }
+    }
 
     return node;
   };
@@ -514,7 +1030,15 @@ export function createChat(token, inspect) {
     const bottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 4;
 
     managers.add(entry.id);
-    messages.append(row(entry));
+
+    const node = row(entry);
+    const line = divider(node, messages.lastElementChild);
+
+    if (line) {
+      messages.append(line);
+    }
+
+    messages.append(node);
 
     if (panel.hidden) {
       $('chat-manager-open').classList.add('unread');
@@ -553,6 +1077,7 @@ export function createChat(token, inspect) {
       }
 
       messages.prepend(fragment);
+      dates(messages);
       messages.scrollTop = initial
         ? messages.scrollHeight
         : messages.scrollTop + messages.scrollHeight - height;
@@ -560,6 +1085,7 @@ export function createChat(token, inspect) {
       loaded = true;
     } catch (error) {
       if (version === revision) {
+        status(error.message);
         $('chat-manager-status').textContent = error.message;
         $('chat-manager-status').hidden = false;
       }
@@ -569,12 +1095,7 @@ export function createChat(token, inspect) {
   };
 
   const renew = user => {
-    const data = {
-      month: user.month,
-      total: user.total,
-      tierUrl: user.tierUrl,
-      tierName: user.tierName
-    };
+    const data = { ...users.get(user.id), ...user };
 
     users.set(user.id, data);
 
@@ -604,13 +1125,21 @@ export function createChat(token, inspect) {
   };
 
   const append = entry => {
-    if (seen.has(entry.id) || announcement(entry)) {
+    if (seen.has(entry.id) || announcement(entry) || new Date(entry.date).getTime() <= cleared) {
       return;
     }
 
     seen.add(entry.id);
 
     const node = row(entry);
+    const line = node.hidden ? null : divider(
+      node,
+      [...log.querySelectorAll('.chat-row:not([hidden])')].at(-1)
+    );
+
+    if (line) {
+      log.append(line);
+    }
 
     log.append(node);
     observer.observe(node);
@@ -620,9 +1149,32 @@ export function createChat(token, inspect) {
       offset = log.scrollTop;
       follow();
     }
-    else {
+    else if (!node.hidden) {
       unread(entry);
       position();
+    }
+
+    if (translating && state.login && entry.type === 'chat' && queued < 20) {
+      queued++;
+      queue = queue.then(async () => {
+        if (!translating || !node.isConnected) {
+          return;
+        }
+
+        const result = await request('/api/chat', { action: 'translate', message: entry.message });
+
+        if (translating && node.isConnected && result.message !== entry.message) {
+          const translation = document.createElement('div');
+
+          translation.className = 'chat-translation';
+          translation.textContent = result.message;
+          node.append(translation);
+        }
+      }).catch(error => {
+        translating = false;
+        $('chat-translate').checked = false;
+        status(error.message);
+      }).finally(() => queued--);
     }
   };
 
@@ -633,15 +1185,22 @@ export function createChat(token, inspect) {
 
     loading = true;
 
+    const version = epoch;
+
     try {
       const params = new URLSearchParams({ cursor: initial ? '' : cursor });
       const data = await request(`/api/chat?${params}`);
+
+      if (version !== epoch) {
+        return;
+      }
+
       const height = log.scrollHeight;
       const existing = initial && log.children.length > 0;
       const fragment = document.createDocumentFragment();
 
       for (const entry of data.entries) {
-        if (announcement(entry)) {
+        if (announcement(entry) || new Date(entry.date).getTime() <= cleared) {
           continue;
         }
 
@@ -661,6 +1220,8 @@ export function createChat(token, inspect) {
       }
 
       log.prepend(fragment);
+      dates(log);
+
       if (!existing) {
         cursor = data.cursor;
       }
@@ -677,30 +1238,62 @@ export function createChat(token, inspect) {
         offset = log.scrollTop;
       }
     } catch (error) {
-      status(error.message);
+      if (version === epoch) {
+        status(error.message);
+      }
     } finally {
-      loading = false;
+      if (version === epoch) {
+        loading = false;
+      }
     }
   };
 
   const collect = async initial => {
-    const user = viewer;
-    const params = new URLSearchParams({ user: user.id, cursor: initial ? '' : older });
-    const data = await request(`/api/chat?${params}`);
-
-    if (viewer !== user) {
+    if (!viewer || (!initial && (collecting || !older))) {
       return;
     }
 
-    const fragment = document.createDocumentFragment();
-
-    for (const entry of data.entries) {
-      fragment.append(row(entry));
+    if (initial) {
+      collection++;
     }
 
-    $('chat-history-log').prepend(fragment);
-    older = data.cursor;
-    $('chat-history-more').hidden = !older;
+    const user = viewer;
+    const version = collection;
+
+    collecting = true;
+
+    try {
+      const params = new URLSearchParams({ user: user.id, cursor: initial ? '' : older });
+      const data = await request(`/api/chat?${params}`);
+
+      if (viewer !== user || version !== collection) {
+        return;
+      }
+
+      const log = $('chat-history-log');
+      const height = log.scrollHeight;
+      const top = log.scrollTop;
+      const fragment = document.createDocumentFragment();
+
+      for (const entry of data.entries) {
+        fragment.append(row(entry));
+      }
+
+      log.prepend(fragment);
+      dates(log);
+      older = data.cursor;
+
+      if (initial) {
+        log.scrollTop = log.scrollHeight;
+      }
+      else {
+        log.scrollTop = top + log.scrollHeight - height;
+      }
+    } finally {
+      if (version === collection) {
+        collecting = false;
+      }
+    }
   };
 
   const button = (label, handler) => {
@@ -721,16 +1314,22 @@ export function createChat(token, inspect) {
   const actions = () => {
     $('chat-person-actions').replaceChildren();
 
-    if (state.manager) {
+    const id = person.id.replace(/\(\d+\)$/, '');
+    const own = id === String(state.userId || '').replace(/\(\d+\)$/, '');
+    const protectedUser = own || id === state.bjId;
+
+    if (state.manager && !protectedUser) {
       for (const [action, label] of [
         ['mute', '채팅 금지'],
-        ['kick', '강제 퇴장'],
+        [
+          person.kicked ? 'cancel' : 'kick',
+          person.kicked ? '강제 퇴장 취소' : '강제 퇴장'
+        ],
         ['black', '블랙리스트 추가']
       ]) {
         button(label, async () => {
           await request('/api/chat', { action, target: person.id });
           $('chat-person').close();
-          status(`${label} 요청 완료`);
         });
       }
 
@@ -742,14 +1341,15 @@ export function createChat(token, inspect) {
       $('chat-person').close();
     });
 
-    if (state.manager && person.role === '매니저') {
-      const node = button('매니저 해임', async () => {
-        await request('/api/chat', { action: 'dismiss', target: person.id });
-        $('chat-person').close();
-        status('매니저 해임 요청 완료');
-      });
+    if (state.streamer && !protectedUser) {
+      const manager = person.role === '매니저';
+      const action = manager ? 'dismiss' : 'appoint';
+      const label = manager ? '매니저 해임' : '매니저 임명';
 
-      node.disabled = !state.streamer;
+      button(label, async () => {
+        await request('/api/chat', { action, target: person.id });
+        $('chat-person').close();
+      });
     }
 
     button('채팅 모아보기', async () => {
@@ -772,22 +1372,35 @@ export function createChat(token, inspect) {
       await collect(true);
     });
 
-    const communication = button('소통', () => {
-      $('chat-whisper').disabled = !state.login;
-      $('chat-person').close();
-      $('chat-communication').showModal();
-    });
+    if (!own) {
+      const communication = button('소통', () => {
+        $('chat-whisper').disabled = !state.login;
+        $('chat-person').close();
+        $('chat-communication').showModal();
+      });
 
-    communication.className = 'chat-forward';
-  };
-
-  const open = async user => {
-    const cached = users.get(user.id);
-
-    if (cached && user.tier) {
-      Object.assign(user, cached);
+      communication.className = 'chat-forward';
     }
 
+    if (own && state.login) {
+      $('chat-person-actions').append(document.createElement('hr'));
+
+      const logout = button('로그아웃', async () => {
+        logout.disabled = true;
+
+        try {
+          const data = await request('/api/account', { action: 'logout' });
+
+          access(data.state);
+          $('chat-person').close();
+        } finally {
+          logout.disabled = false;
+        }
+      });
+    }
+  };
+
+  const profile = user => {
     person = user;
     $('chat-name').textContent = user.name;
     $('chat-id').textContent = user.id;
@@ -820,9 +1433,27 @@ export function createChat(token, inspect) {
     if (!$('chat-person').open) {
       $('chat-person').showModal();
     }
+  };
+
+  const open = async user => {
+    user = { ...user, ...users.get(user.id) };
+    profile(user);
 
     try {
       const data = await request(`/api/user?id=${encodeURIComponent(user.id)}`);
+
+      if (person !== user || !$('chat-person').open) {
+        return;
+      }
+
+      if (data.user) {
+        const latest = { ...user, ...data.user };
+
+        users.set(user.id, latest);
+        Object.assign(user, latest);
+        profile(user);
+      }
+
       const avatar = data.image && image(data.image);
 
       if (person === user && avatar) {
@@ -846,11 +1477,17 @@ export function createChat(token, inspect) {
     streaming = true;
     controller = new AbortController();
 
+    const version = epoch;
+
     try {
       const response = await fetch('/api/chat', {
         headers: { Authorization: `Bearer ${token()}`, Accept: 'text/event-stream' },
         signal: controller.signal
       });
+
+      if (version !== epoch) {
+        return;
+      }
 
       if (!response.ok) {
         throw new Error('채팅 연결 실패');
@@ -861,6 +1498,11 @@ export function createChat(token, inspect) {
       let buffer = '';
 
       await history(true);
+
+      if (version !== epoch) {
+        return;
+      }
+
       previous = '';
       loaded = false;
 
@@ -873,7 +1515,7 @@ export function createChat(token, inspect) {
       while (true) {
         const chunk = await reader.read();
 
-        if (chunk.done) {
+        if (version !== epoch || chunk.done) {
           break;
         }
 
@@ -926,7 +1568,7 @@ export function createChat(token, inspect) {
 
       if (!stopped && !controller.signal.aborted && !disconnected) {
         disconnected = true;
-        status('채팅 연결이 끊겼습니다.');
+        status('채팅 연결이 끊겼습니다.', false);
       }
 
       if (!stopped) {
@@ -938,6 +1580,400 @@ export function createChat(token, inspect) {
   const start = () => {
     void stream();
   };
+
+  let multiple = { running: false, rows: [] };
+  let updating = false;
+  let changing = false;
+  let refresh = null;
+
+  const renderMulti = () => {
+    const rows = multiple.rows;
+    const connected = rows.filter(row => row.connected).length;
+    const errors = rows.filter(row => row.error).length;
+    const waiting =
+      rows.length - connected - rows.filter(row => !row.connected && row.error).length;
+
+    $('chat-multi-count').disabled = changing || multiple.running;
+    $('chat-multi-start').disabled = changing || multiple.running;
+    $('chat-multi-stop').disabled = changing || !multiple.running;
+    $('chat-multi-summary').textContent = multiple.running
+      ? `전체 ${rows.length}개  연결 ${connected}개\n대기 ${waiting}개  오류 ${errors}개`
+      : '';
+    $('chat-multi-summary').hidden = !multiple.running;
+
+    const list = $('chat-multi-list');
+
+    list.replaceChildren();
+
+    if (!rows.length) {
+      return;
+    }
+
+    const table = document.createElement('table');
+    const header = table.createTHead().insertRow();
+
+    for (const label of ['번호', '상태']) {
+      const cell = document.createElement('th');
+
+      cell.textContent = label;
+      header.append(cell);
+    }
+
+    const body = table.createTBody();
+
+    for (const row of rows) {
+      const entry = body.insertRow();
+      let message = '대기';
+
+      if (row.connected) {
+        message = '연결 됨';
+      }
+      else if (row.error) {
+        message = row.error;
+      }
+      else if (row.connecting) {
+        message = '연결 중';
+      }
+
+      entry.insertCell().textContent = row.id;
+      entry.insertCell().textContent = message;
+    }
+
+    list.append(table);
+  };
+
+  const multi = async data => {
+    if (updating) {
+      return;
+    }
+
+    clearTimeout(refresh);
+    updating = true;
+    changing = Boolean(data);
+    renderMulti();
+
+    try {
+      multiple = await request('/api/multi', data);
+    } catch (error) {
+      status(error.message);
+    } finally {
+      updating = false;
+      changing = false;
+      renderMulti();
+
+      if ($('chat-multi').open) {
+        refresh = setTimeout(() => void multi(), 2000);
+      }
+    }
+  };
+
+  $('chat-multi-form').addEventListener('submit', event => {
+    event.preventDefault();
+
+    void multi({ action: 'start', count: Number($('chat-multi-count').value) });
+  });
+  $('chat-multi-stop').addEventListener('click', () => void multi({ action: 'stop' }));
+  $('chat-multi').addEventListener('close', () => clearTimeout(refresh));
+  $('chat-multi-open').addEventListener('click', () => {
+    $('chat-menu').close();
+    $('chat-multi').showModal();
+    void multi();
+  });
+
+  const manage = async data => {
+    const buttons = $('chat-manage').querySelectorAll('button, input');
+
+    for (const button of buttons) {
+      button.disabled = true;
+    }
+
+    try {
+      await request('/api/chat', data);
+    } catch (error) {
+      status(error.message);
+    } finally {
+      for (const button of buttons) {
+        button.disabled = false;
+      }
+      freezing();
+      $('chat-rule-open').disabled = !state.streamer;
+      $('chat-notice-open').disabled = !state.streamer;
+      $('chat-melt').disabled = !state.ice;
+      renderMulti();
+    }
+  };
+
+  $('chat-manage-open').addEventListener('click', () => {
+    $('chat-slow-count').value = state.slow || 0;
+    $('chat-freeze-count').value = state.freezing?.count || 1;
+    $('chat-freeze-month').value = state.freezing?.date || 1;
+
+    for (const [index, checkbox] of [
+      ...$('chat-grades').querySelectorAll('input')
+    ].entries()) {
+      checkbox.checked = Boolean(state.freezing?.auth?.[index]);
+    }
+    $('chat-grades').querySelector('input').checked = true;
+    freezing();
+    $('chat-manage').showModal();
+  });
+  $('chat-grades').addEventListener('change', freezing);
+  $('chat-freeze').addEventListener('click', () => {
+    const auth = [...$('chat-grades').querySelectorAll('input')].map(
+      item => item.checked
+    );
+    const count = Number($('chat-freeze-count').value);
+    const date = Number($('chat-freeze-month').value);
+
+    manage({ action: 'freeze', enabled: true, auth, count, date });
+  });
+  $('chat-melt').addEventListener('click', () => {
+    manage({ action: 'freeze', enabled: false });
+  });
+
+  const tabs = [
+    ['chat-freeze-tab', 'chat-freezing'],
+    ['chat-slow-tab', 'chat-slow'],
+    ['chat-notice-open', 'chat-announcement'],
+    ['chat-rule-open', 'chat-rule-edit']
+  ];
+
+  for (const [tab, panel] of tabs) {
+    $(tab).addEventListener('click', () => {
+      clearTimeout(refresh);
+
+      for (const [button, section] of tabs) {
+        $(section).hidden = section !== panel;
+        $(button).classList.toggle('selected', button === tab);
+      }
+
+      if (panel === 'chat-announcement') {
+        $('chat-announcement-content').value = state.notice || '';
+      }
+      else if (panel === 'chat-rule-edit') {
+        $('chat-rule-input').value = state.rule || '';
+      }
+    });
+  }
+  $('chat-slow').addEventListener('submit', event => {
+    event.preventDefault();
+
+    const count = Number($('chat-slow-count').value);
+
+    manage({ action: 'slow', count });
+  });
+  $('chat-slow-off').addEventListener('click', () => {
+    manage({ action: 'slow', count: 0 });
+  });
+  const display = () => {
+    document.body.dataset.chatSize = settings.size;
+
+    if (popup && !popup.closed) {
+      popup.document.body.dataset.chatSize = settings.size;
+    }
+
+    $('conversation').classList.toggle('chat-small-ogq', settings.small);
+    $('chat-size-value').textContent = settings.size;
+    $('chat-size-down').disabled = settings.size === 1;
+    $('chat-size-up').disabled = settings.size === 5;
+
+    for (const [id, key] of [
+      ['chat-show-emotes', 'emotes'],
+      ['chat-move-emotes', 'motion'],
+      ['chat-small-ogq', 'small'],
+      ['chat-show-entry', 'entry']
+    ]) {
+      $(id).checked = settings[key];
+    }
+
+    const top = log.scrollTop;
+
+    for (const node of log.querySelectorAll('.chat-row')) {
+      const entry = entries.get(node);
+
+      if (entry) {
+        const replacement = row(entry);
+
+        observer.unobserve(node);
+        node.replaceWith(replacement);
+        observer.observe(replacement);
+      }
+    }
+
+    dates(log);
+    log.scrollTop = pinned ? log.scrollHeight : top;
+    offset = log.scrollTop;
+    position();
+
+    try {
+      window.localStorage.setItem('chat-display', JSON.stringify(settings));
+    } catch {}
+  };
+  for (const [id, key] of [
+    ['chat-show-emotes', 'emotes'],
+    ['chat-move-emotes', 'motion'],
+    ['chat-small-ogq', 'small'],
+    ['chat-show-entry', 'entry']
+  ]) {
+    $(id).addEventListener('change', event => {
+      settings[key] = event.target.checked;
+      display();
+    });
+  }
+  for (const [id, change] of [['chat-size-down', -1], ['chat-size-up', 1]]) {
+    $(id).addEventListener('click', () => {
+      settings.size = Math.max(1, Math.min(5, settings.size + change));
+      display();
+    });
+  }
+  const clear = () => {
+    cleared = Date.now();
+    cursor = '';
+    observer.disconnect();
+    log.replaceChildren();
+    preview.replaceChildren();
+    pinned = true;
+    offset = 0;
+    position();
+    $('chat-menu').close();
+  };
+  $('chat-clear').addEventListener('click', clear);
+  $('chat-translate').addEventListener('change', event => {
+    if (event.target.checked && !state.login) {
+      event.target.checked = false;
+      $('chat-translation').close();
+      signin();
+
+      return;
+    }
+
+    translating = event.target.checked;
+  });
+  $('chat-popup').addEventListener('click', () => {
+    $('chat-menu').close();
+
+    if (popup && !popup.closed) {
+      popup.focus();
+
+      return;
+    }
+
+    popup = window.open('', 'soop-chat', 'popup,width=480,height=720');
+
+    if (!popup) {
+      status('팝업을 허용해 주세요.');
+
+      return;
+    }
+
+    const child = popup.document;
+    const nodes = [$('conversation'), ...document.querySelectorAll(
+      'dialog[id^="chat-"], #login, #logs, #kicks, #members'
+    )];
+    const anchors = new Map();
+
+    child.title = '채팅';
+    child.documentElement.lang = 'ko';
+    child.head.replaceChildren();
+
+    for (const source of document.querySelectorAll('link[rel="stylesheet"]')) {
+      const link = child.createElement('link');
+
+      link.rel = 'stylesheet';
+      link.href = source.href;
+      child.head.append(link);
+    }
+
+    child.body.className = document.body.className;
+    child.body.classList.add('chat-window');
+    child.body.dataset.chatSize = settings.size;
+
+    for (const node of nodes) {
+      const anchor = document.createComment('chat-popup');
+
+      node.before(anchor);
+      anchors.set(node, anchor);
+      child.body.append(node);
+    }
+
+    const restore = () => {
+      for (const [node, anchor] of anchors) {
+        anchor.replaceWith(node);
+      }
+
+      popup = undefined;
+      follow();
+    };
+
+    popup.addEventListener('pagehide', restore, { once: true });
+    follow();
+  });
+  display();
+  for (const id of ['chat-display', 'chat-entry', 'chat-translation', 'chat-size']) {
+    $(id + '-open').addEventListener('click', () => {
+      $('chat-menu').close();
+      $(id).showModal();
+    });
+  }
+  for (const id of [
+    'chat-display', 'chat-entry', 'chat-translation', 'chat-size',
+    'chat-nickname', 'chat-multi'
+  ]) {
+    const back = document.createElement('button');
+
+    back.type = 'button';
+    back.className = 'chat-setting-back';
+    back.title = '뒤로가기';
+    back.append($('chat-communication-back').firstElementChild.cloneNode(true));
+    back.addEventListener('click', () => {
+      $(id).close();
+      $('chat-menu').showModal();
+    });
+    $(id).querySelector('.heading').prepend(back);
+  }
+  $('chat-menu-open').addEventListener('click', () => $('chat-menu').showModal());
+  $('chat-nickname-open').addEventListener('click', () => {
+    $('chat-menu').close();
+    $('chat-nickname-input').value = '';
+    $('chat-nickname').showModal();
+    $('chat-nickname-input').focus();
+  });
+  for (const [form, action, input] of [
+    ['chat-announcement-form', 'notice', 'chat-announcement-content'],
+    ['chat-rule-form', 'rule', 'chat-rule-input']
+  ]) {
+    $(form).addEventListener('submit', async event => {
+      event.preventDefault();
+      event.submitter.disabled = true;
+
+      try {
+        await request('/api/chat', { action, message: $(input).value });
+      } catch (error) {
+        status(error.message);
+      } finally {
+        event.submitter.disabled = false;
+      }
+    });
+  }
+  $('chat-nickname-form').addEventListener('submit', async event => {
+    event.preventDefault();
+
+    const button = event.submitter;
+
+    button.disabled = true;
+
+    try {
+      await request('/api/chat', {
+        action: 'nickname',
+        message: $('chat-nickname-input').value
+      });
+      $('chat-nickname').close();
+    } catch (error) {
+      status(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   $('chat-manager-open').addEventListener('click', () => {
     panel.hidden = !panel.hidden;
@@ -988,6 +2024,7 @@ export function createChat(token, inspect) {
       $('chat-manager-status').hidden = true;
     } catch (error) {
       if (version === revision) {
+        status(error.message);
         $('chat-manager-status').textContent = error.message;
         $('chat-manager-status').hidden = false;
       }
@@ -999,6 +2036,95 @@ export function createChat(token, inspect) {
     event.preventDefault();
 
     if (sending || input.disabled || (!input.value.trim() && !sticker)) {
+      return;
+    }
+
+    const value = input.value.trim();
+    const slash = value.startsWith('/') && !icons.some(icon => value.startsWith(icon.keyword));
+
+    if (slash) {
+      const [name, ...args] = value.split(/\s+/);
+      const message = args.join(' ');
+
+      sending = true;
+
+      try {
+        if (name === '/지우기') {
+          clear();
+        }
+        else if (name === '/도움말') {
+          input.value = '/';
+          caret = 1;
+          render(true);
+
+          return;
+        }
+        else if (name === '/팝업' || name === '/멀티') {
+          if (message) {
+            throw new Error('명령어 뒤에 내용을 입력하지 마세요.');
+          }
+
+          const buttons = {
+            '/팝업': 'chat-popup',
+            '/멀티': 'chat-multi-open'
+          };
+
+          $(buttons[name]).click();
+        }
+        else if (name === '/크기') {
+          const size = Number(message);
+
+          if (!Number.isInteger(size) || size < 1 || size > 5) {
+            throw new Error('사용법: /크기 1 ~ 5');
+          }
+
+          settings.size = size;
+          display();
+        }
+        else if (name === '/닉네임' && !message) {
+          $('chat-nickname-open').click();
+        }
+        else if (name === '/번역') {
+          const result = await request('/api/chat', { action: 'translate', message });
+
+          input.value = result.message;
+          caret = input.value.length;
+          render(true);
+
+          return;
+        }
+        else {
+          const action = {
+            '/닉네임': 'nickname',
+            '/귓속말': 'send',
+            '/매니저': 'manager',
+            '/채금': 'mute',
+            '/강퇴': 'kick',
+            '/강퇴취소': 'cancel'
+          }[name];
+
+          if (!action || !message || (name === '/귓속말' && args.length < 2)) {
+            throw new Error('명령어를 확인해 주세요. / 를 입력하면 목록이 나타납니다.');
+          }
+
+          await request('/api/chat', {
+            action,
+            target: ['send', 'mute', 'kick', 'cancel'].includes(action) ? args[0] : '',
+            message: name === '/귓속말' ? args.slice(1).join(' ') : message
+          });
+        }
+
+        if (input.value.trim() === value) {
+          input.value = '';
+          caret = 0;
+          render();
+        }
+      } catch (error) {
+        status(error.message);
+      } finally {
+        sending = false;
+      }
+
       return;
     }
 
@@ -1027,6 +2153,8 @@ export function createChat(token, inspect) {
 
       if (input.value === message) {
         input.value = '';
+        caret = 0;
+        render();
       }
 
       status('');
@@ -1036,15 +2164,28 @@ export function createChat(token, inspect) {
       sending = false;
     }
   });
-  input.addEventListener('focus', rules);
+  compose.addEventListener('focus', rules);
+  compose.addEventListener('click', () => {
+    if (!state.login) {
+      signin();
+    }
+  });
   $('chat-rule-agree').addEventListener('click', () => {
     agreed = state.rule;
     $('chat-rule').close();
-    input.focus();
+    compose.focus();
   });
-  input.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-      event.preventDefault();
+  compose.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (event.shiftKey) {
+      insert('\n');
+    }
+    else {
       $('chat-send').requestSubmit();
     }
   });
@@ -1106,6 +2247,18 @@ export function createChat(token, inspect) {
     });
   }
 
+  const pollNotice = message => {
+    $('chat-poll-message').textContent = message;
+
+    if (!$('chat-poll-notice').open) {
+      $('chat-poll-notice').showModal();
+    }
+  };
+
+  $('chat-poll-notice-confirm').addEventListener('click', () => {
+    $('chat-poll-notice').close();
+  });
+
   $('chat-poll-open').addEventListener('click', async () => {
     const poll = state.poll;
 
@@ -1122,9 +2275,12 @@ export function createChat(token, inspect) {
 
       survey = data.survey;
       $('chat-poll-title').textContent = data.title || '';
-      $('chat-poll-status').textContent = '';
       $('chat-poll-list').replaceChildren();
       $('chat-poll-submit').disabled = true;
+      $('chat-poll-submit').hidden = data.status !== 1;
+      $('chat-poll-cancel').textContent = data.status === 1 ? '취소' : '닫기';
+      $('chat-poll').querySelector('h2').textContent =
+        data.status === 4 ? '투표 결과' : '투표하기';
 
       for (const item of data.list || []) {
         const label = document.createElement('label');
@@ -1134,10 +2290,16 @@ export function createChat(token, inspect) {
         radio.type = 'radio';
         radio.name = 'answer';
         radio.value = item.answer_no;
-        radio.disabled = !state.login;
+        radio.disabled = !state.login || data.status !== 1;
         text.textContent = item.answer_title || '';
+
+        if (data.status === 4) {
+          radio.hidden = true;
+          text.textContent += ` (${Number(item.answer_total) || 0}표)`;
+        }
         radio.addEventListener('change', () => {
-          $('chat-poll-submit').disabled = voting || !state.login;
+          $('chat-poll-submit').disabled =
+            voting || !state.login || state.poll?.status !== 1;
         });
         label.append(radio, text);
         $('chat-poll-list').append(label);
@@ -1145,6 +2307,10 @@ export function createChat(token, inspect) {
 
       if (!$('chat-poll').open) {
         $('chat-poll').showModal();
+      }
+
+      if (data.status === 3) {
+        pollNotice('투표가 마감되었습니다.');
       }
     } catch (error) {
       status(error.message);
@@ -1155,7 +2321,13 @@ export function createChat(token, inspect) {
 
     const selected = $('chat-poll-list').querySelector('input:checked');
 
-    if (voting || !selected || !state.login || survey !== state.poll?.surveyNo) {
+    if (
+      voting
+      || !selected
+      || !state.login
+      || state.poll?.status !== 1
+      || survey !== state.poll?.surveyNo
+    ) {
       return;
     }
 
@@ -1164,10 +2336,11 @@ export function createChat(token, inspect) {
 
     try {
       await request('/api/poll', { survey, answer: Number(selected.value) });
-      $('chat-poll-status').textContent = '투표가 완료되었습니다.';
+      $('chat-poll').close();
+      pollNotice('투표가 완료되었습니다.');
     } catch (error) {
-      $('chat-poll-status').textContent = error.message;
-      $('chat-poll-submit').disabled = !state.login;
+      pollNotice(error.message);
+      $('chat-poll-submit').disabled = !state.login || state.poll?.status !== 1;
     } finally {
       voting = false;
     }
@@ -1184,7 +2357,7 @@ export function createChat(token, inspect) {
     $('chat-target').textContent = `${person.name}에게 귓속말 ×`;
     $('chat-target').hidden = false;
     $('chat-communication').close();
-    input.focus();
+    compose.focus();
   });
   $('chat-history-information').addEventListener('click', async () => {
     const user = viewer;
@@ -1200,8 +2373,333 @@ export function createChat(token, inspect) {
       status(error.message);
     }
   });
-  $('chat-history-more').addEventListener('click', () => {
-    collect(false).catch(error => status(error.message));
+  $('chat-history-log').addEventListener('scroll', () => {
+    if ($('chat-history-log').scrollTop < 100) {
+      collect(false).catch(error => status(error.message));
+    }
+  });
+
+  const period = () => {
+    const selected = $('logs-period').value;
+
+    if (selected === 'custom') {
+      return;
+    }
+
+    const start = new Date();
+    const end = new Date(start);
+
+    if (selected === 'yesterday') {
+      start.setDate(start.getDate() - 1);
+      end.setDate(end.getDate() - 1);
+    }
+    else if (selected === 'week') {
+      start.setDate(start.getDate() - 6);
+    }
+
+    $('logs-start').value = start.toLocaleDateString('sv-SE');
+    $('logs-end').value = end.toLocaleDateString('sv-SE');
+  };
+
+  const results = async initial => {
+    if (!initial && (searching || !continuation)) {
+      return;
+    }
+
+    if (initial) {
+      search++;
+      query = {
+        start: $('logs-start').value,
+        end: $('logs-end').value,
+        type: $('logs-type').value,
+        text: $('logs-query').value
+      };
+      continuation = '';
+      $('logs-results').replaceChildren();
+    }
+
+    const version = search;
+    const channel = epoch;
+    const list = $('logs-results');
+    const labels = {
+      chat: '채팅',
+      ogq: '채팅',
+      manager: '매니저 채팅',
+      system: '알림',
+      subtitle: '자막',
+      notice: '공지',
+      gift: '후원',
+      mute: '채금',
+      kick: '강퇴'
+    };
+
+    searching = true;
+    $('logs-status').textContent = '검색 중';
+
+    try {
+      do {
+        const params = new URLSearchParams({ ...query, cursor: continuation });
+        const data = await request(`/api/logs?${params}`);
+
+        if (version !== search || channel !== epoch || !$('logs').open) {
+          return;
+        }
+
+        continuation = data.cursor;
+
+        for (const entry of data.entries.reverse()) {
+          const node = document.createElement('div');
+          const meta = document.createElement('div');
+          const date = document.createElement('time');
+          const type = document.createElement('span');
+
+          node.className = 'logs-entry';
+          meta.className = 'logs-meta';
+          date.dateTime = entry.date;
+          date.textContent = new Date(entry.date).toLocaleString('ko-KR');
+          type.textContent = labels[entry.type] || '알림';
+          meta.append(date, type);
+
+          if (entry.user?.id) {
+            const id = document.createElement('span');
+
+            id.textContent = entry.user.id;
+            meta.append(id);
+          }
+
+          if (entry.actor || entry.actorId) {
+            const actor = document.createElement('span');
+
+            actor.textContent = `처리자: ${entry.actor || entry.actorId}`;
+            meta.append(actor);
+          }
+
+          if (entry.type === 'mute' && entry.count !== '') {
+            const count = document.createElement('span');
+
+            count.textContent = `${entry.count}회`;
+            meta.append(count);
+          }
+
+          node.append(meta, row(entry));
+
+          if (entry.remarks) {
+            const remarks = document.createElement('div');
+
+            remarks.className = 'logs-remarks';
+            remarks.textContent = entry.remarks;
+            node.append(remarks);
+          }
+
+          list.append(node);
+        }
+
+        if (data.entries.length) {
+          break;
+        }
+      } while (continuation);
+
+      $('logs-status').textContent = list.childElementCount
+        ? `${list.childElementCount}건`
+        : '검색 결과 없음';
+    } catch (error) {
+      if (version === search && channel === epoch) {
+        $('logs-status').textContent =
+          error instanceof TypeError ? '로그 검색 실패' : error.message;
+      }
+    } finally {
+      if (version === search) {
+        searching = false;
+      }
+    }
+  };
+
+  period();
+  $('logs-period').addEventListener('change', period);
+
+  for (const id of ['logs-start', 'logs-end']) {
+    $(id).addEventListener('change', () => {
+      $('logs-period').value = 'custom';
+    });
+  }
+
+  $('logs-form').addEventListener('submit', event => {
+    event.preventDefault();
+    void results(true);
+  });
+  $('logs-open').addEventListener('click', () => {
+    $('menu-items').hidden = true;
+    $('logs').showModal();
+    void results(true);
+  });
+  $('logs-results').addEventListener('scroll', () => {
+    const list = $('logs-results');
+    const remaining = list.scrollHeight - list.scrollTop - list.clientHeight;
+
+    if (remaining < 150) {
+      void results(false);
+    }
+  });
+  $('logs').addEventListener('close', () => {
+    search++;
+    searching = false;
+  });
+
+  $('kicks-open').addEventListener('click', async () => {
+    const channel = epoch;
+    const version = ++kicks;
+
+    $('menu-items').hidden = true;
+    $('kicks-results').replaceChildren();
+    $('kicks-status').textContent = '불러오는 중';
+    $('kicks').showModal();
+
+    try {
+      const list = await request('/api/kicks');
+
+      if (version !== kicks || channel !== epoch || !$('kicks').open) {
+        return;
+      }
+
+      for (const entry of list) {
+        const node = document.createElement('div');
+        const target = document.createElement('button');
+        const meta = document.createElement('div');
+        const date = document.createElement('span');
+        const actor = document.createElement('span');
+        const user = { id: entry.userId, name: entry.userNick };
+
+        node.className = 'logs-entry';
+        target.type = 'button';
+        target.className = 'chat-identity';
+        target.textContent = `${user.name || user.id} (${user.id})`;
+        target.addEventListener('click', () => void open(user));
+        meta.className = 'logs-meta';
+        date.textContent = entry.date;
+        actor.textContent = `처리자: ${entry.adminNick || entry.adminId}`;
+        meta.append(date, actor);
+        node.append(target, meta);
+        $('kicks-results').append(node);
+      }
+
+      $('kicks-status').textContent = list.length ? `${list.length}명` : '목록 없음';
+    } catch (error) {
+      if (version === kicks && channel === epoch && $('kicks').open) {
+        $('kicks-status').textContent =
+          error instanceof TypeError ? '강제 퇴장 인원 요청 실패' : error.message;
+      }
+    }
+  });
+  $('kicks').addEventListener('close', () => {
+    kicks++;
+  });
+
+  const participants = async reset => {
+    if (reset) {
+      members++;
+      listing = false;
+      memberCursor = '';
+      memberRole = '';
+      memberQuery = $('members-search').value;
+      $('members-list').replaceChildren();
+    }
+    else if (listing || !memberCursor) {
+      return;
+    }
+
+    const version = members;
+    const channel = epoch;
+    const params = new URLSearchParams({ query: memberQuery, cursor: memberCursor });
+
+    listing = true;
+    $('members-status').textContent = '불러오는 중';
+
+    try {
+      const data = await request(`/api/members?${params}`);
+
+      if (version !== members || channel !== epoch || !$('members').open) {
+        return;
+      }
+
+      memberCursor = data.cursor;
+      $('members-title').textContent =
+        `채팅 참여 인원 (${data.total.toLocaleString('ko-KR')}명)`;
+
+      for (const user of data.entries) {
+        const role = user.role || '일반';
+
+        if (role !== memberRole) {
+          const heading = document.createElement('h3');
+
+          heading.textContent = role === '열혈' ? '열혈팬' : role;
+          $('members-list').append(heading);
+          memberRole = role;
+        }
+
+        const button = document.createElement('button');
+
+        button.type = 'button';
+        button.className = 'member';
+        button.dataset.role = role;
+
+        if (role === '스트리머') {
+          const avatar = image(user.image, '프로필');
+
+          if (avatar) {
+            avatar.className = 'member-avatar';
+            button.append(avatar);
+          }
+
+          identify(button, { ...user, tier: 0 });
+        }
+        else {
+          identify(button, user);
+        }
+
+        const id = document.createElement('span');
+
+        id.className = 'member-id';
+        id.textContent = `(${user.id})`;
+        button.append(id);
+        button.addEventListener('click', () => void open(user));
+        $('members-list').append(button);
+      }
+
+      $('members-status').textContent = data.matches ? '' : '검색 결과 없음';
+    } catch (error) {
+      if (version === members && channel === epoch) {
+        $('members-status').textContent =
+          error instanceof TypeError ? '참여자 목록 요청 실패' : error.message;
+      }
+    } finally {
+      if (version === members) {
+        listing = false;
+      }
+    }
+  };
+
+  $('members-open').addEventListener('click', () => {
+    $('members-search').value = '';
+    $('members').showModal();
+    void participants(true);
+  });
+  $('members-search').addEventListener('input', () => {
+    clearTimeout(memberTimer);
+    members++;
+    memberTimer = setTimeout(() => void participants(true), 250);
+  });
+  $('members-list').addEventListener('scroll', () => {
+    const list = $('members-list');
+    const remaining = list.scrollHeight - list.scrollTop - list.clientHeight;
+
+    if (remaining < 100) {
+      void participants(false);
+    }
+  });
+  $('members').addEventListener('close', () => {
+    clearTimeout(memberTimer);
+    members++;
+    listing = false;
   });
 
   const picker = ogq => {
@@ -1231,8 +2729,6 @@ export function createChat(token, inspect) {
         $('chat-sticker-image').src = url;
         $('chat-sticker-image').alt = button.title;
         $('chat-sticker').hidden = false;
-        $('chat-icons').close();
-        input.focus();
       });
       $('chat-ogq-list').append(button);
     }
@@ -1241,7 +2737,7 @@ export function createChat(token, inspect) {
   $('chat-sticker').addEventListener('click', () => {
     sticker = null;
     $('chat-sticker').hidden = true;
-    input.focus();
+    compose.focus();
   });
   $('chat-icons-emoticon').addEventListener('click', () => picker(false));
   $('chat-icons-ogq').addEventListener('click', () => {
@@ -1281,6 +2777,12 @@ export function createChat(token, inspect) {
     }
   });
   $('chat-emoticon').addEventListener('click', () => {
+    dismissed = false;
+
+    if (rules()) {
+      return;
+    }
+
     picker(false);
     $('chat-icons-ogq').disabled = Boolean(target);
     $('chat-icons-list').replaceChildren();
@@ -1298,9 +2800,7 @@ export function createChat(token, inspect) {
       node.title = icon.keyword;
       node.append(img);
       node.addEventListener('click', () => {
-        input.setRangeText(icon.keyword, input.selectionStart, input.selectionEnd, 'end');
-        $('chat-icons').close();
-        input.focus();
+        insert(icon.keyword, false);
       });
       $('chat-icons-list').append(node);
     }
@@ -1308,15 +2808,107 @@ export function createChat(token, inspect) {
     $('chat-icons').showModal();
   });
 
+  $('login-logo').src = new URL('/images/svg/soop_logo.svg', DOMAIN.res).href;
+
+  const signin = () => {
+    if (state.login || $('login').open) {
+      return;
+    }
+
+    $('login-error').hidden = true;
+
+    try {
+      const id = window.localStorage.getItem('soop-login-id') || '';
+
+      $('login-id').value = id;
+      $('login-save').checked = Boolean(id);
+    } catch {}
+
+    $('login').showModal();
+    $('login-id').focus();
+  };
+
+  $('account').addEventListener('click', () => {
+    if (state.login) {
+      void open({ id: state.userId, name: state.userName || state.userId });
+
+      return;
+    }
+
+    signin();
+  });
+
+  $('login').addEventListener('close', () => {
+    $('login-password').value = '';
+    $('login-second').value = '';
+  });
+
+  $('login-form').addEventListener('submit', async event => {
+    event.preventDefault();
+
+    if ($('login-submit').disabled) {
+      return;
+    }
+
+    $('login-submit').disabled = true;
+    $('login-error').hidden = true;
+
+    try {
+      const data = await request('/api/account', {
+        action: 'login',
+        id: $('login-id').value.trim(),
+        password: $('login-password').value,
+        second: $('login-second').value
+      });
+
+      try {
+        if ($('login-save').checked) {
+          window.localStorage.setItem('soop-login-id', $('login-id').value.trim());
+        }
+        else {
+          window.localStorage.removeItem('soop-login-id');
+        }
+      } catch {}
+
+      access(data.state);
+      $('login').close();
+    } catch (error) {
+      $('login-error').textContent = error.message;
+      $('login-error').hidden = false;
+    } finally {
+      $('login-password').value = '';
+      $('login-second').value = '';
+      $('login-submit').disabled = false;
+    }
+  });
+
   for (const id of [
+    'login',
     'chat-person',
+    'chat-manage',
+    'chat-menu',
+    'chat-display',
+    'chat-entry',
+    'chat-translation',
+    'chat-size',
+    'chat-multi',
+    'chat-nickname',
     'chat-icons',
     'chat-history',
     'chat-communication',
     'chat-rule',
-    'chat-poll'
+    'chat-poll',
+    'chat-poll-notice',
+    'logs',
+    'kicks',
+    'members'
   ]) {
-    $(id + '-close').addEventListener('click', () => $(id).close());
+    $(id + '-close').addEventListener('click', () => {
+      if (id === 'chat-rule') {
+        dismissed = true;
+      }
+      $(id).close();
+    });
     $(id).addEventListener('click', event => {
       if (event.target !== $(id)) {
         return;
@@ -1330,13 +2922,26 @@ export function createChat(token, inspect) {
         || event.clientY > bounds.bottom;
 
       if (outside) {
+        if (id === 'chat-rule') {
+          dismissed = true;
+        }
         $(id).close();
       }
     });
   }
 
+  $('chat-rule').addEventListener('cancel', () => {
+    dismissed = true;
+  });
+  $('chat-rule-avatar').addEventListener('error', () => {
+    $('chat-rule-avatar').hidden = true;
+  });
+
   window.addEventListener('pagehide', () => {
+    popup?.close();
     stopped = true;
+    clearTimeout(memberTimer);
+    members++;
     observer.disconnect();
     window.cancelAnimationFrame(frame);
     controller?.abort();
@@ -1362,13 +2967,29 @@ export function createChat(token, inspect) {
       stickers = data.packs || [];
       $('conversation').hidden = !data.player;
       $('chat-rule-name').textContent = `${data.name || data.player || ''}님의`;
-      $('chat-rule-avatar').hidden = !data.profile?.image;
 
-      if (data.profile?.image) {
-        $('chat-rule-avatar').src = data.profile.image;
+      const portrait = image(data.profile?.image);
+      const avatar = $('chat-rule-avatar');
+
+      avatar.hidden = !portrait;
+
+      if (portrait && avatar.src !== portrait.src) {
+        avatar.src = portrait.src;
       }
 
       if (channel !== data.player) {
+        epoch++;
+        $('members').close();
+        $('members-list').replaceChildren();
+        $('kicks').close();
+        $('kicks-results').replaceChildren();
+        loading = false;
+        search++;
+        searching = false;
+        continuation = '';
+        $('logs-results').replaceChildren();
+        $('logs-status').textContent = '';
+
         const notice = $('chat-notice');
 
         notice.open = false;

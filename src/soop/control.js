@@ -2,8 +2,94 @@ import crypto from 'crypto';
 import net from 'net';
 import os from 'os';
 import path from 'path';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { loadTenants, tenantOptions } from '#soop/tenants';
 
 const connections = new WeakMap();
+let starting = null;
+
+export async function multiStatus() {
+  try {
+    const rows = await requestMulti('status');
+
+    return { running: true, rows };
+  } catch (error) {
+    if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) {
+      return { running: false, rows: [] };
+    }
+
+    throw error;
+  }
+}
+
+export async function startMulti(count) {
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new Error('연결 개수 오류');
+  }
+
+  if (starting) {
+    throw new Error('실행 준비 중');
+  }
+
+  starting = (async () => {
+    const current = await multiStatus();
+
+    tenantOptions(loadTenants(), count);
+
+    if (current.running) {
+      await stopMulti();
+    }
+
+    const child = spawn(
+      process.execPath,
+      [fileURLToPath(new URL('../multi.js', import.meta.url)), String(count)],
+      {
+        cwd: process.cwd(),
+        windowsHide: true,
+        stdio: ['pipe', 'ignore', 'ignore']
+      }
+    );
+
+    let failed = false;
+
+    child.once('error', () => {
+      failed = true;
+    });
+    child.once('exit', () => {
+      failed = true;
+    });
+    child.stdin.on('error', () => {});
+
+    try {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        if (failed) {
+          throw new Error('멀티 실행 실패');
+        }
+
+        const result = await multiStatus();
+
+        if (result.running) {
+          return { ...result, updated: current.running };
+        }
+      }
+
+      throw new Error('멀티 실행 시간 초과');
+    } catch (error) {
+      child.stdin.end();
+
+      throw error;
+    }
+  })();
+
+  try {
+    return await starting;
+  } finally {
+    starting = null;
+  }
+}
 
 export function controlPath() {
   const root = process.platform === 'win32' ? process.cwd().toLowerCase() : process.cwd();
@@ -129,7 +215,10 @@ export async function requestMulti(action, target = '전체') {
         message = '명령 실패';
       }
 
-      reject(new Error(message));
+      const failure = new Error(message);
+
+      failure.code = error.code;
+      reject(failure);
     });
 
     socket.once('end', () => {

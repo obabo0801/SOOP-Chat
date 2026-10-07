@@ -1,6 +1,6 @@
 {
   "name": "soop-chat",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "license": "MIT",
   "author": "unjongjjing",
   "type": "module",
@@ -19,6 +19,7 @@
     "#utils/*": "./src/utils/*.js"
   },
   "files": [
+    "src/multi.js",
     "src/soop",
     "src/utils",
     "README.md",

@@ -186,7 +186,7 @@ export class Package extends EventEmitter {
           return;
         }
 
-        if (packet.SVC !== 'HTMLPORT') {
+        if (!packet || packet.SVC !== 'HTMLPORT') {
           return;
         }
 
@@ -313,6 +313,10 @@ export class Package extends EventEmitter {
     }
 
     const { SVC: svc, RESULT: result, DATA: data = {} } = packet;
+
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return;
+    }
 
     if (Number(data.ERRCODE ?? result) === -39998) {
       const error = new Error('고화질 사용 중');
@@ -495,7 +499,7 @@ export class Package extends EventEmitter {
     this.emit('error', error);
   }
 
-  close(error = new Error('패키지 연결 중지')) {
+  close(error = new Error('패키지 연결 정지')) {
     if (this.closed) {
       return false;
     }

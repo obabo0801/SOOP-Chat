@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 
 function segments(text, source) {
   const result = [];
@@ -71,6 +73,7 @@ export function createVideo(provider, options = {}) {
   const lifetime = new AbortController();
   const folder = fs.mkdtemp(path.join(options.directory || os.tmpdir(), 'soop-video-'));
   let active;
+  let recorded;
   let quality = 'hd';
   let qualities = [];
   let state = 'loading';
@@ -322,6 +325,7 @@ export function createVideo(provider, options = {}) {
             active.ended = true;
           }
 
+          recorded = active || recorded;
           active = null;
           state = 'offline';
           message = '오프라인';
@@ -354,12 +358,17 @@ export function createVideo(provider, options = {}) {
           active.transport = null;
         }
 
+        if (recorded && recorded.source.bjId !== source.bjId) {
+          recorded = null;
+        }
+
         stream.source = source;
         stream.ended = false;
         active = stream;
       }
 
       await record(active);
+      recorded = active;
       state = 'live';
       message = '';
     } catch (error) {
@@ -383,8 +392,11 @@ export function createVideo(provider, options = {}) {
         else if (error.message === '패키지 연결 실패') {
           message = 'SOOP 패키지 필요';
         }
+        else if (error.code === 'SOOP_STREAM') {
+          message = error.message;
+        }
         else {
-          message = '연결 실패';
+          message = '로딩 중';
         }
       }
     }
@@ -414,17 +426,22 @@ export function createVideo(provider, options = {}) {
     return job;
   };
 
-  const snapshot = () => ({
-    state,
-    message,
-    quality,
-    qualities: selectable(),
-    captions: Boolean(active?.source.captions),
-    url: active?.segments.length ? `/media/${active.key}/0` : '',
-    duration: active?.duration || 0,
-    width: active?.width || null,
-    height: active?.height || null
-  });
+  const snapshot = () => {
+    const stream = active?.segments.length ? active : recorded;
+
+    return {
+      state,
+      message,
+      quality,
+      qualities: selectable(),
+      captions: Boolean(active?.source.captions),
+      url: stream?.segments.length ? `/media/${stream.key}/0` : '',
+      download: stream?.segments.length ? `/media/${stream.key}/save` : '',
+      duration: stream?.duration || 0,
+      width: stream?.width || null,
+      height: stream?.height || null
+    };
+  };
 
   const open = async selected => {
     await refresh();
@@ -451,13 +468,81 @@ export function createVideo(provider, options = {}) {
     return snapshot();
   };
 
+  const download = async (stream, response, name) => {
+    const segments = stream.segments.slice();
+    const unsupported = segments.some(item =>
+      item.content.some(line => {
+        return (
+          line.startsWith('#EXT-X-MAP:')
+          || (line.startsWith('#EXT-X-KEY:') && !line.includes('METHOD=NONE'))
+        );
+      })
+    );
+
+    if (!segments.length || unsupported) {
+      throw new Error('영상 저장 형식 오류');
+    }
+
+    const files = segments.map(item => {
+      const id = Number(item.url.split('/').at(-1));
+
+      return stream.files.get(id);
+    });
+
+    if (files.some(file => !file)) {
+      throw new Error('녹화 파일 없음');
+    }
+
+    const first = await fs.readFile(files[0].file);
+
+    if (first.length < 188 || first[0] !== 0x47) {
+      throw new Error('영상 저장 형식 오류');
+    }
+
+    const filename =
+      String(name || 'SOOP')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+        .replace(/\.ts$/i, '')
+        .replace(/[. ]+$/g, '') || 'SOOP';
+    const trimmed = Array.from(filename).slice(0, 100).join('');
+    const encoded = encodeURIComponent(trimmed + '.ts').replace(/['()*]/g, character => {
+      const code = character.charCodeAt(0).toString(16).toUpperCase();
+
+      return `%${code}`;
+    });
+    const length = files.reduce((sum, file) => sum + file.size, 0);
+
+    response.writeHead(200, {
+      'Content-Type': 'video/mp2t',
+      'Content-Length': length,
+      'Content-Disposition': `attachment; filename="SOOP.ts"; filename*=UTF-8''${encoded}`
+    });
+
+    async function* chunks() {
+      yield first;
+
+      for (const file of files.slice(1)) {
+        yield await fs.readFile(file.file);
+      }
+    }
+
+    await pipeline(Readable.from(chunks()), response);
+  };
+
   const send = async (request, response) => {
-    const match = /^\/media\/([a-f0-9]{48})\/(\d+)$/.exec(request.url);
+    const address = new URL(request.url, 'http://localhost');
+    const match = /^\/media\/([a-f0-9]{48})\/(\d+|save)$/.exec(address.pathname);
     const stream = [...streams.values()].find(item => item.key === match?.[1]);
 
     if (!stream || closed) {
       response.writeHead(404);
       response.end();
+
+      return;
+    }
+
+    if (match[2] === 'save') {
+      await download(stream, response, address.searchParams.get('name'));
 
       return;
     }

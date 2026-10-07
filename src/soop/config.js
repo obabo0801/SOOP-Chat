@@ -9,8 +9,10 @@ export const DOMAIN = {
   package: 'ws://localhost:21201/Websocket',
   chapi: 'https://chapi.sooplive.com',
   channel: 'https://api-channel.sooplive.com',
+  mobile: 'https://api.m.sooplive.com',
 
   vod: 'https://vod.sooplive.com',
+  clip: 'https://stbbs.sooplive.com',
 
   st: 'https://st.sooplive.com',
   res: 'https://res.sooplive.com',

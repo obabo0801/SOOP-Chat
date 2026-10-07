@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { SoopHistory } from '#soop/history';
 import { checkFlag } from '#soop/handler';
+import * as control from '#soop/control';
 import * as weflab from '#utils/weflab';
 
 const EVENTS = {
@@ -44,6 +45,7 @@ export class SoopMacro {
     this.allowed = null;
     this.challenge = '';
     this.battle = '';
+    this.settlement = null;
 
     if (this.file) {
       if (!fs.existsSync(this.file)) {
@@ -125,6 +127,7 @@ export class SoopMacro {
       this.allowed = null;
       this.challenge = '';
       this.battle = '';
+      this.settlement = null;
     });
 
     for (const event of ['subBj', 'userFlag']) {
@@ -191,7 +194,8 @@ export class SoopMacro {
       let invalid =
         ids.has(id)
         || !['command', 'text', 'regex', 'event', 'interval'].includes(kind)
-        || !['reply', 'roulette', 'mute', 'kick', 'warn'].includes(action);
+        || !['reply', 'roulette', 'mute', 'kick', 'warn', 'multi', 'notify'].includes(action)
+        || (['multi', 'notify'].includes(action) && kind !== 'command');
 
       if (!invalid) {
         invalid =
@@ -206,7 +210,7 @@ export class SoopMacro {
             && typeof rule.reply !== 'string'
             && (!Array.isArray(rule.reply)
               || rule.reply.some(line => typeof line !== 'string')))
-          || (!patterns.length && rule.enabled !== false)
+          || (!patterns.length && kind !== 'interval' && rule.enabled !== false)
           || patterns.some(
             pattern => typeof pattern !== 'string' || (!pattern && kind !== 'interval')
           );
@@ -478,7 +482,9 @@ export class SoopMacro {
           roulette: '룰렛',
           mute: '채금',
           kick: '강퇴',
-          warn: '경고'
+          warn: '경고',
+          multi: '멀티',
+          notify: '알림'
         }[rule.action];
       }
 
@@ -590,7 +596,7 @@ export class SoopMacro {
     const message = String(data.message || '').trim();
     const command = message.split(/\s+/)[0];
     const args = message.slice(command.length).trim();
-    const context = { ...data, message, source };
+    const context = { ...data, message, source, manager };
     const forward = /^(!공지|!시간)(?:\/|\s|$)([\s\S]*)$/.exec(message);
     const edit = rule => {
       const value =
@@ -713,6 +719,22 @@ export class SoopMacro {
       }
     }
 
+    if (manager && this.access({ access: 'manager' }, context)) {
+      const rule = this.rules.find(item => {
+        const matches = item.patterns.some(pattern => {
+          return pattern.toLowerCase() === command.toLowerCase();
+        });
+
+        const enabled = this.isEnabled(item) && item.input !== 'console';
+
+        return ['multi', 'notify'].includes(item.action) && enabled && matches;
+      });
+
+      if (rule) {
+        return this.enqueue(rule, context, { args });
+      }
+    }
+
     if (source === 'chat' && this.isSelf(data.userId)) {
       return false;
     }
@@ -720,6 +742,7 @@ export class SoopMacro {
     for (const rule of this.rules) {
       if (
         !this.isEnabled(rule)
+        || ['multi', 'notify'].includes(rule.action)
         || ['event', 'interval'].includes(rule.kind)
         || (rule.input && rule.input !== 'both' && rule.input !== source)
         || !this.access(rule, context)
@@ -789,6 +812,23 @@ export class SoopMacro {
     }
 
     if (event === 'missionSettle') {
+      const settlement = this.settlement;
+      const total = (data.list || []).reduce(
+        (sum, item) => sum + Number(item[2] || 0),
+        0
+      );
+
+      this.settlement = null;
+
+      if (
+        settlement
+        && settlement.count > 0
+        && settlement.count === total
+        && Date.now() - settlement.time < 5000
+      ) {
+        return;
+      }
+
       for (const [userId, userNick, count] of data.list || []) {
         this.handleEvent('mission', { ...data, userId, userNick, count });
       }
@@ -828,6 +868,13 @@ export class SoopMacro {
       }
 
       names[0] = { GIFT: 'battleGift', SETTLE: 'battleSettle' }[data.type];
+    }
+
+    if (['challengeSettle', 'battleSettle'].includes(names[0])) {
+      this.settlement = {
+        count: Number(data.settle_count),
+        time: Date.now()
+      };
     }
 
     if (event === 'balloon' && data.fanOrder > 0) {
@@ -905,6 +952,43 @@ export class SoopMacro {
   }
 
   async run(rule, data, match) {
+    if (rule.action === 'multi') {
+      if (!data.manager || !this.access({ access: 'manager' }, data)) {
+        return false;
+      }
+
+      const args = String(match.args || '').trim();
+      const command = data.message.split(/\s+/)[0];
+
+      try {
+        let message = `/개털림/ [${command}] 전체 정지 완료`;
+
+        if (args) {
+          if (!/^\d+$/.test(args)) {
+            throw new Error('연결 개수 오류');
+          }
+
+          const count = Number(args);
+
+          const result = await control.startMulti(count);
+          const status = result.updated ? '수정 완료' : '실행 완료';
+
+          message = `/개번쩍/ [${command}] ${status}\n${count}개`;
+        }
+        else if ((await control.multiStatus()).running) {
+          await control.stopMulti();
+        }
+
+        await this.replyManager(message);
+
+        return true;
+      } catch (error) {
+        await this.replyManager(`[${command}] 처리 실패`);
+
+        throw error;
+      }
+    }
+
     if (rule.kind === 'interval' && this.client.iceMode) {
       return false;
     }
@@ -1077,6 +1161,32 @@ export class SoopMacro {
         return result;
       })
       .replace(/\\r\\n|\\n/g, '\n');
+
+    if (rule.action === 'notify') {
+      if (
+        !data.manager
+        || !this.access({ access: 'manager' }, data)
+        || !this.canSend()
+        || !this.rules.includes(rule)
+        || !message.trim()
+      ) {
+        return false;
+      }
+
+      const command = data.message.split(/\s+/)[0];
+      const result = Boolean(
+        await this.client.notify?.call(message, rule.cooldown, rule.name)
+      );
+      let response = `[${command}] 알림 전송 실패`;
+
+      if (result) {
+        response = `/개번쩍/ [${command}] 알림 전송 완료`;
+      }
+
+      await this.replyManager(response);
+
+      return result;
+    }
 
     let ogq;
 

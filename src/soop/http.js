@@ -98,6 +98,31 @@ export async function postLiveInfo(bjId, options = {}) {
   return result;
 }
 
+function restriction(channel, cookie) {
+  const result = Number(channel?.RESULT);
+
+  if (result === 0) {
+    return null;
+  }
+
+  let message = '영상 연결에 실패했습니다';
+
+  if (result === -6 || result === -8) {
+    const login = /(?:^|;\s*)AuthTicket=/.test(cookieString(cookie));
+
+    message = login ? '성인 인증이 필요합니다' : '로그인이 필요합니다';
+  }
+  else if (result === -11) {
+    message = '로그인이 필요합니다';
+  }
+
+  const error = new Error(message);
+
+  error.code = 'SOOP_STREAM';
+
+  return error;
+}
+
 export async function getStream(bjId, quality = 'hd', options = {}) {
   const referer = new URL(`/${encodeURIComponent(bjId)}`, DOMAIN.play);
 
@@ -116,6 +141,12 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
   });
 
   if (Number(channel?.RESULT) !== 1 || !channel?.BNO || !channel?.RMD) {
+    const error = restriction(channel, options.cookie);
+
+    if (error) {
+      throw error;
+    }
+
     return null;
   }
 
@@ -152,6 +183,12 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
   });
 
   if (Number(auth?.CHANNEL?.RESULT) !== 1 || !auth?.CHANNEL?.AID) {
+    const error = restriction(auth?.CHANNEL, options.cookie);
+
+    if (error) {
+      throw error;
+    }
+
     return null;
   }
 
@@ -198,9 +235,10 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
     center: `${channel.CTIP}:${Number(channel.CTPT)}`,
     captions: Boolean(channel.SUBTITLE_FLAG),
     quality,
-    qualities: channel.VIEWPRESET
-      .filter(item => item.name !== 'auto')
-      .map(item => ({ name: item.name, label: item.label })),
+    qualities: channel.VIEWPRESET.filter(item => item.name !== 'auto').map(item => ({
+      name: item.name,
+      label: item.label
+    })),
     url: source.href,
     headers
   };
@@ -284,6 +322,18 @@ export async function postChatRule(bjId, options = {}) {
   return result;
 }
 
+export async function postRule(message, display, options = {}) {
+  const url = new URL('/api/broad_chat_rule.php', DOMAIN.live);
+  const body = new URLSearchParams({
+    szAction: 'set',
+    chat_rule: message,
+    chat_rule_display: display
+  });
+  const result = await requestJson(url, { ...options, method: 'POST', body });
+
+  return result;
+}
+
 export async function getMyPlus(options = {}) {
   const url = new URL('/api/myplus/preferbjOnLnbController.php', DOMAIN.live);
 
@@ -330,6 +380,21 @@ export async function getSection(bjId, chip, options = {}) {
 
 export async function getVod(bjId, chip = '', options = {}) {
   const result = getChannel(bjId, `vod/${chip}`, options);
+
+  return result;
+}
+
+export async function getVodContent(titleNo, options = {}) {
+  const url = new URL('/station/video/a/view', DOMAIN.mobile);
+  const body = new URLSearchParams({
+    nTitleNo: String(titleNo),
+    nApiLevel: '11',
+    nPlaylistIdx: '0'
+  });
+  const json = await requestJson(url, { ...options, method: 'POST', body });
+  const valid = json?.result === 1 && String(json.data?.title_no) === String(titleNo);
+  const removed = json?.result === -1 && Number(json.data?.code) === -6221;
+  const result = { status: valid ? 200 : null, data: json?.data, removed };
 
   return result;
 }

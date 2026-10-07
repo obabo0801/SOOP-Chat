@@ -2,6 +2,7 @@ import { config } from 'dotenv';
 import readline from 'readline';
 import { SoopClient } from '#soop/client';
 import { SoopMacro } from '#soop/macro';
+import { SoopNotify } from '#soop/notify';
 import { openEditor } from '#soop/editor';
 import { DOMAIN } from '#soop/config';
 import * as http from '#soop/http';
@@ -48,6 +49,8 @@ let login;
     idle: process.env.IDLE?.toLowerCase() === 'true',
     userAgent: process.env.USER_AGENT || undefined
   });
+
+  new SoopNotify(client);
 
   client.on('live', data => {
     if (data.result === -1 && data.message) {
@@ -711,6 +714,10 @@ let login;
   });
 
   client.on('translation', data => {
+    if (data.preview) {
+      return;
+    }
+
     log.info(
       '[번역]',
       `\x1b[1m${data.message} (${data.before.label} → ${data.after.label})\x1b[0m`
@@ -1111,12 +1118,6 @@ let login;
   });
 
   client.on('session', data => {
-    if (!data.login) {
-      log.warn('[세션]', '방송 연령 제한이 설정되어 종료합니다.');
-
-      return;
-    }
-
     log.warn(
       '[세션]',
       `방송 세션이 변경되어 재연결합니다.\n`
@@ -1199,36 +1200,50 @@ let login;
     const required = [-6, -8].includes(Number(data.code));
     const configured = cookie || getConfig('userId');
 
-    if (!required || !configured || client.cookie || authenticating || stopTask) {
+    if (
+      !required
+      || !configured
+      || client.cookie
+      || authenticating
+      || stopTask
+      || client.signedout
+    ) {
       return;
     }
 
     const bjId = client.bjId;
 
-    authenticating = client.safe(async () => {
-      await client.connecting;
+    authenticating = client
+      .safe(async () => {
+        await client.connecting;
 
-      if (stopTask || client.closed || client.bjId !== bjId) {
-        return;
-      }
+        if (stopTask || client.closed || client.bjId !== bjId || client.signedout) {
+          return;
+        }
 
-      await authenticate();
+        await authenticate();
 
-      if (stopTask || client.closed || client.bjId !== bjId) {
-        return;
-      }
+        if (stopTask || client.closed || client.bjId !== bjId) {
+          return;
+        }
 
-      await client.connect();
-    }).finally(() => {
-      authenticating = null;
-    });
+        await client.connect();
+      })
+      .finally(() => {
+        authenticating = null;
+      });
   });
 
   client.on('join', () => {
     clearTimeout(login);
     login = null;
 
-    if (stopTask || client.cookie || (!cookie && !getConfig('userId'))) {
+    if (
+      stopTask
+      || client.cookie
+      || client.signedout
+      || (!cookie && !getConfig('userId'))
+    ) {
       return;
     }
 
@@ -1243,7 +1258,7 @@ let login;
           return;
         }
 
-        if (client.cookie) {
+        if (client.cookie || client.signedout) {
           return;
         }
 
@@ -1370,6 +1385,12 @@ function getConfig(name) {
 
     const value = result.trim();
 
+    if (name === 'origins') {
+      const origins = value.split(',').map(origin => origin.trim()).filter(Boolean);
+
+      return origins;
+    }
+
     if (['auto', 'editor', 'isLink', 'isList'].includes(name)) {
       if (value.toLowerCase() === 'true') {
         return true;
@@ -1382,7 +1403,7 @@ function getConfig(name) {
       return null;
     }
 
-    if (['pver', 'subtitle', 'mode'].includes(name)) {
+    if (['pver', 'subtitle', 'mode', 'port'].includes(name)) {
       const output = value && Number.isFinite(Number(value)) ? Number(value) : null;
 
       return output;
@@ -1532,6 +1553,9 @@ function testDonation(name, count) {
 async function edit(browser = true) {
   editor = await openEditor(macro, {
     browser,
+    host: getConfig('host') ?? '127.0.0.1',
+    port: getConfig('port') ?? 0,
+    origins: getConfig('origins') ?? [],
     account: () => ({
       cookie: getConfig('cookie'),
       userId: getConfig('userId'),
@@ -1579,6 +1603,11 @@ async function command(cmd) {
   const text = input.slice(name.length).trim();
 
   try {
+    if (client.notify?.command(input)) {
+      prompt();
+      return;
+    }
+
     if (name.startsWith('!')) {
       const result = await macro.handle(
         {
@@ -2371,6 +2400,7 @@ async function command(cmd) {
               ['/연결해제', '', '현재 연결 해제'],
               ['/자동', 'true\nfalse', '방송 대기 설정'],
               ['/목록', '', '연결 상태 확인'],
+              ['/알림', '[항목] 켜기|끄기\n목록|다시읽기', 'ntfy 알림 설정'],
               ['/로그인', '아이디\n비밀번호\n2차 비밀번호', '로그인'],
               ['/로그아웃', '', '로그아웃'],
               ['/닉네임', '[이름]', '임시 닉네임 변경'],

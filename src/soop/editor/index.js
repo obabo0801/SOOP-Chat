@@ -32,10 +32,15 @@ const events = {
   missionSettle: '미션 정산'
 };
 const drafts = new WeakMap();
+const sender = { name: '매니저', role: '매니저' };
 let config;
 let broadcaster;
-let sender = { name: '미리보기' };
+let link = '';
+let started = 0;
+let saving = false;
 let ceremonies = {};
+let sampling = 0;
+let sampleTimer;
 let revision;
 let selected = -1;
 let dirty = false;
@@ -65,11 +70,11 @@ function status(message, error = false) {
   }
 }
 
-async function request(method = 'GET', data) {
+async function request(method = 'GET', data, endpoint = '/api/config') {
   let response;
 
   try {
-    response = await fetch('/api/config', {
+    response = await fetch(endpoint, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -132,6 +137,7 @@ function list() {
       selected = index;
       render();
       $('macros').dataset.page = 'edit';
+      $('macros').querySelector('main').scrollTop = 0;
     });
     $('list').append(button);
   }
@@ -187,6 +193,10 @@ function gallery() {
 }
 
 function sample() {
+  const version = ++sampling;
+
+  clearTimeout(sampleTimer);
+
   const item = packs.find(item => item.name === pack);
   const url = $('output').value === 'manager' ? '' : item?.images[number - 1];
   const gifts = [];
@@ -201,7 +211,64 @@ function sample() {
     }
   }
 
-  const node = createPreview(sender, lines($('reply').value), url, emoticons, gifts);
+  const reply = lines($('reply').value);
+
+  if ($('action').value === 'roulette') {
+    if (!$('default').value.trim()) {
+      $('macro-preview').hidden = true;
+      $('macro-preview').replaceChildren();
+
+      return;
+    }
+
+    const rule = { action: 'roulette' };
+    const draft = {};
+
+    for (const key of ['title', 'default', 'index', 'ranges', 'numbers']) {
+      draft[key] = $(key).value;
+    }
+
+    $('macro-preview').hidden = false;
+
+    try {
+      roulette(rule, draft);
+    } catch (error) {
+      $('macro-preview').textContent = error.message;
+
+      return;
+    }
+
+    $('macro-preview').textContent = '불러오는 중';
+    sampleTimer = setTimeout(async () => {
+      try {
+        const data = await request('POST', rule, '/api/roulette');
+
+        if (version !== sampling) {
+          return;
+        }
+
+        const node = createPreview(sender, data.message, url, emoticons, gifts);
+
+        $('macro-preview').replaceChildren(node);
+      } catch (error) {
+        if (version === sampling) {
+          $('macro-preview').textContent = error.message;
+        }
+      }
+    }, 300);
+
+    return;
+  }
+
+  $('macro-preview').hidden = !reply.trim() && !url && !gifts.length;
+
+  if ($('macro-preview').hidden) {
+    $('macro-preview').replaceChildren();
+
+    return;
+  }
+
+  const node = createPreview(sender, reply, url, emoticons, gifts);
 
   $('macro-preview').replaceChildren(node);
 }
@@ -498,11 +565,13 @@ function visibility() {
   $('flags-field').hidden = kind !== 'regex';
   $('edit-field').hidden = kind !== 'command' || action !== 'reply';
   $('commands-field').hidden = action !== 'reply';
+  $('output').closest('label').hidden = action === 'notify';
 
   for (const option of $('action').options) {
     const moderation = ['mute', 'kick', 'warn'].includes(option.value);
+    const command = ['multi', 'notify'].includes(option.value) && kind !== 'command';
 
-    option.hidden = moderation && ['interval', 'event'].includes(kind);
+    option.hidden = command || (moderation && ['interval', 'event'].includes(kind));
     option.disabled = option.hidden;
   }
 
@@ -510,7 +579,7 @@ function visibility() {
 
   direct.hidden = kind === 'interval';
   direct.disabled = direct.hidden;
-  $('ogq-field').hidden = $('output').value === 'manager';
+  $('ogq-field').hidden = action === 'notify' || $('output').value === 'manager';
   $('divider').hidden = $('ogq-field').hidden;
   $('attachment').hidden =
     $('ogq-field').hidden || !packs.some(item => item.name === pack);
@@ -698,9 +767,7 @@ function capture() {
   sample();
 }
 
-function roulette(rule) {
-  const draft = drafts.get(rule);
-
+function roulette(rule, draft = drafts.get(rule)) {
   if (!draft || rule.action !== 'roulette') {
     return;
   }
@@ -771,6 +838,7 @@ let attached = '';
 let playback = 0;
 let watching;
 let live = true;
+let notice = '';
 let moving = false;
 let saved;
 let fetching = false;
@@ -789,6 +857,18 @@ function position() {
   }
 
   return null;
+}
+
+function overlay(message = notice) {
+  const video = $('video');
+  const history = Boolean(attached) && video.readyState >= 2 && !live;
+  const loading = message === '로딩 중';
+  const state = $('video-state');
+
+  notice = message;
+  state.classList.toggle('loading', loading);
+  state.textContent = loading ? '' : message;
+  state.hidden = !message || history;
 }
 
 function remember() {
@@ -824,9 +904,10 @@ function sync() {
   live = true;
   video.playbackRate = 1;
   $('live').classList.add('active');
+  overlay();
 }
 
-function stop() {
+function stop(reset = true) {
   resetPreview();
   playback++;
   media?.destroy();
@@ -834,9 +915,12 @@ function stop() {
   attached = '';
   $('video').removeAttribute('src');
   $('video').load();
-  $('timeline').max = 0;
-  $('timeline').value = 0;
-  fill($('timeline'));
+
+  if (reset) {
+    $('timeline').max = 0;
+    $('timeline').value = 0;
+    fill($('timeline'));
+  }
 
   for (const id of ['pause', 'rewind', 'live', 'timeline']) {
     $(id).disabled = true;
@@ -926,11 +1010,12 @@ function controls() {
   }
 
   $('live').classList.toggle('active', live);
+  overlay();
   remember();
 }
 
 function attach(data) {
-  stop();
+  stop(Boolean(attached) && attached !== data.url);
   attached = data.url;
 
   const current = playback;
@@ -962,9 +1047,19 @@ function attach(data) {
     media.on(Hls.Events.ERROR, (event, error) => {
       if (current === playback && error.fatal) {
         remember();
-        stop();
-        $('video-state').textContent = '영상 연결 실패';
-        $('video-state').hidden = false;
+
+        if (error.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          media.startLoad();
+          overlay('로딩 중');
+        }
+        else if (error.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          media.recoverMediaError();
+          overlay('로딩 중');
+        }
+        else {
+          stop(false);
+          overlay('영상 연결에 실패했습니다');
+        }
       }
     });
     media.attachMedia(video);
@@ -986,8 +1081,7 @@ function attach(data) {
     }
   }
   else {
-    $('video-state').textContent = '영상 재생 미지원';
-    $('video-state').hidden = false;
+    overlay('영상 재생 미지원');
   }
 }
 
@@ -1068,20 +1162,27 @@ async function play(quality) {
       option.classList.toggle('selected', option.dataset.value === data.quality);
     }
     $('quality').disabled = !available.length;
-    $('video-state').hidden = data.state === 'live';
-    $('video-state').textContent = data.message || '';
+    let message = data.message || '';
 
-    if (data.url && data.state === 'live' && attached !== data.url) {
-      attach(data);
+    if (data.state === 'live') {
+      const buffering = $('video').readyState < 3 && !paused;
+
+      message = buffering ? '로딩 중' : '';
     }
-    else if (data.state === 'offline' && attached) {
-      remember();
-      stop();
+    else if (data.state === 'loading' && !message) {
+      message = '로딩 중';
+    }
+
+    overlay(message);
+    $('video-save').dataset.url = data.download || '';
+    $('video-save').disabled = saving || !data.download;
+
+    if (data.url && attached !== data.url) {
+      attach(data);
     }
   } catch {
     if (!attached) {
-      $('video-state').textContent = '영상 연결 실패';
-      $('video-state').hidden = false;
+      overlay('로딩 중');
     }
   } finally {
     fetching = false;
@@ -1337,6 +1438,102 @@ $('volume').addEventListener('click', () => {
   $('video').muted = !$('video').muted;
   controls();
 });
+
+async function save() {
+  const button = $('video-save');
+  const url = button.dataset.url;
+
+  if (saving || !url) {
+    return;
+  }
+
+  const date = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });
+  const title = broadcaster?.station?.user_nick || player || 'SOOP';
+  const suggested = `${title}_${date}`.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-') + '.ts';
+  let name = suggested;
+  let handle;
+
+  saving = true;
+  button.disabled = true;
+
+  try {
+    if (typeof window.showSaveFilePicker === 'function') {
+      handle = await window.showSaveFilePicker({
+        suggestedName: suggested,
+        types: [{ description: '동영상', accept: { 'video/mp2t': ['.ts'] } }]
+      });
+    }
+    else {
+      name = window.prompt('파일 이름', suggested);
+
+      if (!name?.trim()) {
+        return;
+      }
+    }
+
+    const address = new URL(url, location.href);
+
+    address.searchParams.set('name', name);
+
+    if (handle) {
+      const response = await fetch(address);
+
+      if (!response.ok) {
+        const data = await response.json();
+
+        throw new Error(data.error || '영상 저장 실패');
+      }
+
+      if (!response.body) {
+        throw new Error('영상 저장 실패');
+      }
+
+      let writable;
+
+      try {
+        writable = await handle.createWritable();
+      } catch (error) {
+        await response.body.cancel();
+
+        throw error;
+      }
+
+      await response.body.pipeTo(writable);
+    }
+    else {
+      const link = document.createElement('a');
+
+      link.href = address.href;
+      link.download = name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      status(error instanceof TypeError ? '영상 저장 실패' : error.message, true);
+    }
+  } finally {
+    saving = false;
+    button.disabled = !button.dataset.url;
+  }
+}
+
+$('video-save').addEventListener('click', save);
+$('video-clip').addEventListener('click', () => {
+  const button = $('video-clip');
+  const url = new URL('/vodclip/index.php/', DOMAIN.clip);
+
+  url.search = new URLSearchParams({
+    bj_id: button.dataset.streamer,
+    broad_no: button.dataset.broad,
+    type: 'catch',
+    system: 'html5',
+    second: '0',
+    midroll: '0'
+  });
+  window.open(url.href, 'soop-clip', 'popup,width=900,height=760');
+});
 $('fullscreen').addEventListener('click', () => {
   if (document.fullscreenElement) {
     document.exitFullscreen().catch(() => {});
@@ -1372,6 +1569,7 @@ $('timeline').addEventListener('change', () => {
   $('video').playbackRate = 1;
   $('video').currentTime = target;
   moving = false;
+  overlay();
 });
 document.addEventListener('keydown', event => {
   if (document.querySelector('dialog[open]') || event.target.closest('#conversation')) {
@@ -1444,8 +1642,23 @@ document.addEventListener('keydown', event => {
   controls();
 });
 $('video').addEventListener('timeupdate', controls);
+$('video').addEventListener('seeked', controls);
 $('video').addEventListener('pause', controls);
 $('video').addEventListener('volumechange', controls);
+for (const event of ['waiting', 'stalled']) {
+  $('video').addEventListener(event, () => {
+    const video = $('video');
+
+    if (attached && !video.paused && video.readyState < 3) {
+      overlay('로딩 중');
+    }
+  });
+}
+$('video').addEventListener('playing', () => {
+  if (notice === '로딩 중') {
+    overlay('');
+  }
+});
 $('video').addEventListener('loadeddata', () => {
   if (paused) {
     $('video').pause();
@@ -1626,10 +1839,138 @@ function inspect(profile) {
   }
 }
 
+function duration() {
+  if (!started) {
+    $('video-duration').textContent = '';
+
+    return;
+  }
+
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  const hours = String(Math.floor(seconds / 3600)).padStart(2, '0');
+  const minutes = String(Math.floor(seconds / 60) % 60).padStart(2, '0');
+  const remainder = String(seconds % 60).padStart(2, '0');
+
+  $('video-duration').textContent = `${hours}:${minutes}:${remainder} 방송 중`;
+}
+
+function statistics(data) {
+  const profile = data.profile;
+  const active = Boolean(profile?.broad);
+  const broadcast = data.broadcast || {};
+
+  $('video-broadcast').textContent = active
+    ? broadcast.title || profile.broad.broad_title || ''
+    : '';
+
+  const streamer = profile?.id || data.player;
+  const number = broadcast.number || profile?.broad?.broad_no;
+
+  $('video-broadcast').removeAttribute('href');
+
+  if (active && streamer && number) {
+    $('video-broadcast').href = new URL(
+      `/${encodeURIComponent(streamer)}/${encodeURIComponent(number)}`,
+      DOMAIN.play
+    ).href;
+  }
+
+  const tags = $('video-tags');
+
+  tags.replaceChildren();
+  $('video-clip').disabled = !active || !broadcast.number;
+  $('video-clip').dataset.broad = broadcast.number || '';
+  $('video-clip').dataset.streamer = profile?.id || data.player || '';
+
+  if (active) {
+    const hashtags = String(broadcast.hashtag || '')
+      .split(/[,#]/)
+      .map(tag => tag.trim())
+      .filter(Boolean);
+    const categories = broadcast.categories?.length
+      ? broadcast.categories
+      : [broadcast.category];
+    const groups = [
+      ['language', broadcast.languages || []],
+      ['category', categories],
+      ['tag', hashtags]
+    ];
+
+    for (const [kind, values] of groups) {
+      for (const value of new Set(values.filter(Boolean))) {
+        const link = document.createElement('a');
+        const route =
+          kind === 'category'
+            ? `/directory/category/${encodeURIComponent(value)}/live`
+            : '/search';
+        const url = new URL(route, DOMAIN.soop);
+
+        if (kind !== 'category') {
+          url.search = new URLSearchParams({
+            hash: 'hashtag',
+            tagname: value,
+            hashtype: 'live',
+            stype: 'hash',
+            acttype: 'total',
+            location: 'live'
+          });
+        }
+
+        link.href = url.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = value;
+        tags.append(link);
+      }
+    }
+  }
+
+  const values = {
+    subscription: profile?.subscription?.total,
+    favorite: profile?.status?.fan_cnt,
+    up: profile?.status?.today_ok_cnt
+  };
+
+  for (const [id, value] of Object.entries(values)) {
+    const number = Number(value);
+    const valid =
+      active && value !== undefined && value !== null && Number.isFinite(number);
+    const element = $(`video-${id}-count`);
+
+    element.textContent = valid ? number.toLocaleString('ko-KR') : '';
+  }
+
+  $('video-name').textContent = data.name || profile?.station?.user_nick || '';
+  $('video-password').hidden = !active || !data.restricted?.password;
+  $('video-adult').hidden = !active || !data.restricted?.adult;
+  avatar('video-portrait', profile?.image);
+  $('video-station').href = new URL(
+    `/station/${encodeURIComponent(profile?.id || data.player || '')}`,
+    DOMAIN.soop
+  ).href;
+
+  $('video-name').href = $('video-station').href;
+
+  $('video-subscription').classList.toggle('active', profile?.subscribed === true);
+  $('video-favorite').classList.toggle('active', profile?.favorite === true);
+  $('members-count').textContent = Number(data.viewers || 0).toLocaleString('ko-KR');
+
+  const date = active && profile.station?.broad_start;
+  const time = date ? Date.parse(date.replace(' ', 'T') + '+09:00') : NaN;
+
+  started = Number.isFinite(time) ? time : 0;
+  duration();
+}
+
 function assets(data) {
   chat.update(data);
-  sender = data.sender || { name: '미리보기' };
+  statistics(data);
   ceremonies = data.ceremonies || {};
+
+  const origin = data.origins?.[0];
+
+  link = origin ? new URL(`/#${token}`, origin).href : '';
+  $('link-copy').hidden = !link;
 
   const name = data.name || '';
 
@@ -1664,6 +2005,8 @@ function assets(data) {
   avatar('portrait', profile?.image);
   avatar('emblem', emblem);
   $('emblem').title = title;
+  avatar('video-emblem', emblem);
+  $('video-emblem').title = title;
   $('information').disabled = !profile;
 
   const channel = data.player || '';
@@ -1756,8 +2099,9 @@ $('form').addEventListener('change', event => {
   if (event.target.id === 'kind') {
     const kind = $('kind').value;
     const moderation = ['mute', 'kick', 'warn'].includes($('action').value);
+    const command = ['multi', 'notify'].includes($('action').value) && kind !== 'command';
 
-    if (moderation && ['interval', 'event'].includes(kind)) {
+    if (command || (moderation && ['interval', 'event'].includes(kind))) {
       $('action').value = 'reply';
     }
 
@@ -1976,6 +2320,135 @@ document.addEventListener('click', event => {
 
 $('macro-open').addEventListener('click', popup);
 
+function notification(data) {
+  const config = data.config;
+  const groups = new Map();
+
+  $('notify-enabled').checked = config.enabled;
+  $('notify-server').value = config.server;
+  $('notify-topic').value = config.topic;
+  $('notify-token').value = '';
+  $('notify-token').placeholder = data.authenticated ? '기존 토큰 유지' : '';
+  $('notify-clear').checked = false;
+  $('notify-clear').parentElement.hidden = !data.authenticated;
+  $('notify-keywords').value = config.keywords.join('\n');
+  $('notify-nicknames').value = config.nicknames.join('\n');
+  $('notify-events').replaceChildren();
+
+  for (const [key, [group, name]] of Object.entries(data.events)) {
+    if (!groups.has(group)) {
+      const field = document.createElement('fieldset');
+      const title = document.createElement('legend');
+
+      title.textContent = group;
+      field.append(title);
+      groups.set(group, field);
+      $('notify-events').append(field);
+    }
+
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    const text = document.createElement('span');
+
+    label.className = 'switch';
+    input.type = 'checkbox';
+    input.dataset.event = key;
+    input.checked = config.events[key];
+    text.textContent = name;
+    label.append(input, text);
+    groups.get(group).append(label);
+  }
+}
+
+function notifications() {
+  const events = Object.fromEntries(
+    [...$('notify-events').querySelectorAll('input')].map(input => {
+      return [input.dataset.event, input.checked];
+    })
+  );
+  const config = {
+    enabled: $('notify-enabled').checked,
+    server: $('notify-server').value.trim(),
+    topic: $('notify-topic').value.trim(),
+    keywords: $('notify-keywords').value.split('\n').map(value => value.trim()).filter(Boolean),
+    nicknames: $('notify-nicknames').value.split('\n').map(value => value.trim()).filter(Boolean),
+    events
+  };
+  const token = $('notify-token').value.trim();
+
+  if ($('notify-clear').checked) {
+    config.token = '';
+  }
+  else if (token) {
+    config.token = token;
+  }
+
+  return config;
+}
+
+$('notify-open').addEventListener('click', async () => {
+  $('menu-items').hidden = true;
+  $('notify-open').disabled = true;
+
+  try {
+    const data = await request('GET', undefined, '/api/notify');
+
+    notification(data);
+    $('notify-connection').open = !data.connected;
+    $('notify-status').hidden = true;
+    $('notify').showModal();
+  } catch (error) {
+    status(error.message, true);
+  } finally {
+    $('notify-open').disabled = false;
+  }
+});
+
+$('notify-close').addEventListener('click', () => $('notify').close());
+
+async function notify(method) {
+  $('notify-test').disabled = true;
+  $('notify-save').disabled = true;
+  $('notify-status').hidden = true;
+
+  try {
+    const data = await request(method, notifications(), '/api/notify');
+
+    if (method === 'PUT') {
+      notification(data);
+    }
+
+    $('notify-status').textContent = method === 'PUT' ? '저장되었습니다.' : '알림을 전송했습니다.';
+    $('notify-status').classList.remove('error');
+  } catch (error) {
+    $('notify-status').textContent = error.message;
+    $('notify-status').classList.add('error');
+  } finally {
+    $('notify-status').hidden = false;
+    $('notify-test').disabled = false;
+    $('notify-save').disabled = false;
+  }
+}
+
+$('notify-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void notify('PUT');
+});
+
+$('notify-test').addEventListener('click', () => void notify('POST'));
+
+$('link-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(link);
+    $('link-copy').textContent = '복사되었습니다';
+    setTimeout(() => {
+      $('link-copy').textContent = '접속 주소 복사';
+    }, 2000);
+  } catch {
+    status('접속 주소를 복사할 수 없습니다.', true);
+  }
+});
+
 $('menu-enabled').addEventListener('change', () => {
   if (!config) {
     return;
@@ -1984,7 +2457,10 @@ $('menu-enabled').addEventListener('change', () => {
   $('enabled').checked = $('menu-enabled').checked;
   config.enabled = $('enabled').checked;
   changed();
-  popup();
+
+  if (config.enabled) {
+    popup();
+  }
 });
 
 $('macro-close').addEventListener('click', () => {
@@ -1995,7 +2471,7 @@ $('macro-back').addEventListener('click', () => {
   $('macros').dataset.page = 'list';
 });
 
-for (const id of ['profile', 'macros']) {
+for (const id of ['profile', 'macros', 'notify']) {
   $(id).addEventListener('click', event => {
     if (event.target !== $(id)) {
       return;
@@ -2014,13 +2490,22 @@ for (const id of ['profile', 'macros']) {
   });
 }
 
-for (const id of ['portrait', 'emblem', 'profile-portrait']) {
+for (const id of [
+  'portrait',
+  'emblem',
+  'profile-portrait',
+  'video-portrait',
+  'video-emblem'
+]) {
   $(id).addEventListener('error', () => {
     $(id).hidden = true;
   });
 }
 
 const chat = createChat(() => token, inspect);
+const broadcastTimer = setInterval(duration, 1000);
+
+window.addEventListener('pagehide', () => clearInterval(broadcastTimer));
 
 watch();
 await load();

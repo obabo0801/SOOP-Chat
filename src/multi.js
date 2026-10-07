@@ -73,6 +73,15 @@ async function start() {
     });
 
     rl.on('line', input => {
+      if (!stopping && input.trim().split(/\s+/)[0] === '/알림') {
+        try {
+          manager.clients.values().next().value?.client.notify?.command(input);
+        } catch (error) {
+          log.error('[알림]', error);
+        }
+        return;
+      }
+
       if (stopping || input.trim() !== '/목록') {
         return;
       }

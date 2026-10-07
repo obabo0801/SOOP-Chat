@@ -6,6 +6,9 @@
 
     "weflab": "WEFLAB",
     "editor": true,
+    "host": "HOST",
+    "port": "PORT",
+    "origins": "ORIGINS",
 
     "isLink": true,
     "isList": false,

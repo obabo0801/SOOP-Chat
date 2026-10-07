@@ -148,5 +148,6 @@ vite.config.ts.timestamp-*
 /browser-*.json
 
 /tenants.json
+/notifications.json
 /macros.json
 /update.bat
