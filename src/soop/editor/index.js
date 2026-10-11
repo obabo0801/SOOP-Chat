@@ -1050,8 +1050,9 @@ $('video-toggle').addEventListener('click', async () => {
 function position() {
   const video = $('video');
 
-  if (media?.liveSyncPosition != null) {
-    return media.liveSyncPosition;
+  const edge = media?.latestLevelDetails?.edge;
+  if (Number.isFinite(edge)) {
+    return Math.max(0, edge - 4);
   }
 
   if (video.seekable.length) {
@@ -1197,7 +1198,7 @@ function controls() {
       const delay = target - video.currentTime;
 
       if (delay > 6) {
-        sync(false);
+        sync(delay > 12);
       }
       else {
         video.playbackRate = delay > 1.5 ? 1.05 : 1;
@@ -1251,10 +1252,10 @@ function attach(data) {
       backBufferLength: 120,
       liveDurationInfinity: true,
       initialLiveManifestSize: 3,
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: Infinity,
+      liveSyncDuration: 4,
+      liveMaxLatencyDuration: Infinity,
       maxLiveSyncPlaybackRate: 1,
-      liveSyncOnStallIncrease: 1
+      liveSyncOnStallIncrease: 0
     });
     const hls = media;
     hls.on(Hls.Events.BUFFER_APPENDED, () => {
