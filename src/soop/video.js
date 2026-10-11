@@ -12,6 +12,7 @@ function segments(text, source) {
   let tags = [];
   let key = '';
   let map = '';
+  let date;
 
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
@@ -29,12 +30,17 @@ function segments(text, source) {
     }
     else if (/^#EXT-X-(DISCONTINUITY|PROGRAM-DATE-TIME|BYTERANGE)(:|$)/.test(line)) {
       tags.push(line);
+
+      if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+        date = Date.parse(line.slice(25));
+      }
     }
     else if (line && !line.startsWith('#') && duration > 0) {
       const url = new URL(line, source).href;
       const content = [key, map, ...tags].filter(Boolean);
 
-      result.push({ sequence, duration, url, content });
+      result.push({ sequence, duration, url, content, date });
+      date += duration * 1000;
       sequence++;
       duration = 0;
       tags = [];
@@ -44,7 +50,7 @@ function segments(text, source) {
   return result;
 }
 
-function manifest(stream) {
+function manifest(stream, link) {
   const duration = stream.segments.reduce((value, item) => {
     return Math.max(value, Math.ceil(item.duration));
   }, 1);
@@ -57,7 +63,8 @@ function manifest(stream) {
   ];
 
   for (const item of stream.segments) {
-    lines.push(...item.content, item.url);
+    lines.push(...item.content.map(line => line.replace(/URI="([^"]+)"/g,
+      (_, uri) => `URI="${link(uri)}"`)), link(item.url));
   }
 
   if (stream.ended) {
@@ -72,9 +79,13 @@ export function createVideo(provider, options = {}) {
   const requests = new Set();
   const lifetime = new AbortController();
   const folder = fs.mkdtemp(path.join(options.directory || os.tmpdir(), 'soop-video-'));
+  let generation = 0;
+  let transition = new AbortController();
   let active;
   let recorded;
-  let quality = 'hd';
+  let quality = 'best';
+  let automatic = true;
+  let upgrade = 0;
   let qualities = [];
   let state = 'loading';
   let message = '';
@@ -82,6 +93,7 @@ export function createVideo(provider, options = {}) {
   let timer;
   let job;
   let closed = false;
+  let paused = false;
   let closing;
   let available = true;
   let checked = 0;
@@ -196,8 +208,11 @@ export function createVideo(provider, options = {}) {
     }
 
     const segment = await stream.transport.read();
+    const previous = stream.segments.at(-1);
+    const date = previous && !stream.discontinuity
+      ? previous.date + previous.duration * 1000 : Date.now() - segment.duration * 1000;
     const url = await write(stream, { content: segment.content, type: 'video/mp2t' });
-    const content = [`#EXTINF:${segment.duration},`];
+    const content = [`#EXT-X-PROGRAM-DATE-TIME:${new Date(date).toISOString()}`, `#EXTINF:${segment.duration},`];
 
     if (stream.discontinuity) {
       content.unshift('#EXT-X-DISCONTINUITY');
@@ -207,6 +222,7 @@ export function createVideo(provider, options = {}) {
     stream.segments.push({
       sequence: stream.segments.length,
       duration: segment.duration,
+      date,
       content,
       url
     });
@@ -242,6 +258,18 @@ export function createVideo(provider, options = {}) {
 
     const items = segments(text, url);
     const last = stream.segments.at(-1);
+    let date = Date.now() - items.reduce((sum, item) => sum + item.duration * 1000, 0);
+
+    for (const item of items) {
+      const previous = stream.segments.find(segment => segment.sequence === item.sequence);
+
+      item.date = Number.isFinite(item.date) ? item.date : previous?.date ?? date;
+      date = item.date + item.duration * 1000;
+
+      if (!item.content.some(line => line.startsWith('#EXT-X-PROGRAM-DATE-TIME:'))) {
+        item.content.unshift(`#EXT-X-PROGRAM-DATE-TIME:${new Date(item.date).toISOString()}`);
+      }
+    }
 
     if (last && items.at(-1)?.sequence < last.sequence) {
       stream.seen.clear();
@@ -306,11 +334,35 @@ export function createVideo(provider, options = {}) {
   };
 
   const update = async () => {
+    const current = generation;
+    const signal = AbortSignal.any([lifetime.signal, transition.signal]);
+
     try {
       await refresh();
 
+      if (current !== generation) {
+        return;
+      }
+
+      if (automatic && available && Date.now() >= upgrade) {
+        const highest = [...qualities].sort((a, b) =>
+          (Number.parseInt(b.label, 10) || 0) - (Number.parseInt(a.label, 10) || 0))[0];
+        const resolution = Number.parseInt(qualities.find(item => item.name === quality)?.label, 10) || 0;
+        if (highest && Number.parseInt(highest.label, 10) > resolution) quality = highest.name;
+        else if (!qualities.length) quality = 'best';
+      }
+
+      if (!available && (quality === 'best'
+        || Number.parseInt(qualities.find(item => item.name === quality)?.label, 10) > 540)) {
+        quality = 'hd';
+      }
+
       if (!active || Date.now() >= next || active.source.quality !== quality) {
-        const source = await provider(quality, lifetime.signal);
+        const source = await provider(quality, signal);
+
+        if (current !== generation) {
+          return;
+        }
 
         next = Date.now() + 15000;
 
@@ -334,6 +386,7 @@ export function createVideo(provider, options = {}) {
         }
 
         qualities = source.qualities || [];
+        quality = source.quality;
 
         const identity = `${source.bjId}/${source.broadNo}/${source.quality}`;
         let stream = streams.get(identity);
@@ -367,12 +420,19 @@ export function createVideo(provider, options = {}) {
         active = stream;
       }
 
-      await record(active);
-      recorded = active;
+      const stream = active;
+
+      await record(stream);
+
+      if (current !== generation) {
+        return;
+      }
+
+      recorded = stream;
       state = 'live';
       message = '';
     } catch (error) {
-      if (!closed) {
+      if (!closed && current === generation) {
         if (active?.transport) {
           active.transport.close(error);
           active.transport = null;
@@ -380,17 +440,15 @@ export function createVideo(provider, options = {}) {
 
         next = 0;
         state = 'loading';
-        if (error.code === 'SOOP_BUSY') {
+        if (error.code === 'SOOP_BUSY' || error.message === '패키지 연결 실패') {
           quality = 'hd';
+          upgrade = Date.now() + 30000;
           available = false;
           checked = Date.now() + 5000;
           message = '';
         }
         else if (error.code === 'ENOSPC') {
           message = '녹화 공간 부족';
-        }
-        else if (error.message === '패키지 연결 실패') {
-          message = 'SOOP 패키지 필요';
         }
         else if (error.code === 'SOOP_STREAM') {
           message = error.message;
@@ -403,7 +461,7 @@ export function createVideo(provider, options = {}) {
   };
 
   const run = () => {
-    if (closed) {
+    if (closed || paused) {
       return Promise.resolve();
     }
 
@@ -415,7 +473,7 @@ export function createVideo(provider, options = {}) {
     job = update().finally(() => {
       job = null;
 
-      if (!closed) {
+      if (!closed && !paused) {
         const delay = state === 'live' ? 1500 : 5000;
 
         timer = setTimeout(() => void run(), delay);
@@ -428,6 +486,18 @@ export function createVideo(provider, options = {}) {
 
   const snapshot = () => {
     const stream = active?.segments.length ? active : recorded;
+    const timing = [];
+    let time = 0;
+    let expected;
+
+    for (const segment of stream?.segments || []) {
+      if (expected === undefined || Math.abs(segment.date - expected) > 250) {
+        timing.push({ date: segment.date, time });
+      }
+
+      expected = segment.date + segment.duration * 1000;
+      time += segment.duration;
+    }
 
     return {
       state,
@@ -438,6 +508,8 @@ export function createVideo(provider, options = {}) {
       url: stream?.segments.length ? `/media/${stream.key}/0` : '',
       download: stream?.segments.length ? `/media/${stream.key}/save` : '',
       duration: stream?.duration || 0,
+      date: stream?.segments[0]?.date || null,
+      timing,
       width: stream?.width || null,
       height: stream?.height || null
     };
@@ -454,11 +526,14 @@ export function createVideo(provider, options = {}) {
       }
     }
 
-    if (selected && selected !== quality) {
+    if (selected) {
       if (qualities.length && !qualities.some(item => item.name === selected)) {
         throw new Error('화질 오류');
       }
+      automatic = false;
+    }
 
+    if (selected && selected !== quality) {
       quality = selected;
       next = 0;
       await job;
@@ -529,7 +604,7 @@ export function createVideo(provider, options = {}) {
     await pipeline(Readable.from(chunks()), response);
   };
 
-  const send = async (request, response) => {
+  const send = async (request, response, link = value => value) => {
     const address = new URL(request.url, 'http://localhost');
     const match = /^\/media\/([a-f0-9]{48})\/(\d+|save)$/.exec(address.pathname);
     const stream = [...streams.values()].find(item => item.key === match?.[1]);
@@ -551,7 +626,7 @@ export function createVideo(provider, options = {}) {
 
     if (id === 0) {
       response.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
-      response.end(manifest(stream));
+      response.end(manifest(stream, link));
 
       return;
     }
@@ -605,6 +680,42 @@ export function createVideo(provider, options = {}) {
     response.end(content.subarray(start, end + 1));
   };
 
+  const reset = async () => {
+    paused = true;
+    generation++;
+    transition.abort();
+    transition = new AbortController();
+    clearTimeout(timer);
+
+    for (const stream of streams.values()) {
+      stream.transport?.close();
+      stream.transport = null;
+    }
+
+    for (const request of requests) {
+      request.abort();
+    }
+
+    active = null;
+    recorded = null;
+    streams.clear();
+    quality = 'best';
+    automatic = true;
+    upgrade = 0;
+    qualities = [];
+    available = true;
+    checked = 0;
+    next = 0;
+    state = 'loading';
+    message = '';
+    await job?.catch(() => {});
+
+    const directory = await folder;
+    const files = await fs.readdir(directory);
+
+    await Promise.all(files.map(file => fs.rm(path.join(directory, file), { force: true })));
+  };
+
   const close = () => {
     if (closing) {
       return closing;
@@ -633,5 +744,12 @@ export function createVideo(provider, options = {}) {
     return closing;
   };
 
-  return { open, snapshot, send, close, start: run };
+  const start = async () => {
+    paused = false;
+    await job;
+
+    return run();
+  };
+
+  return { open, snapshot, send, reset, close, start };
 }

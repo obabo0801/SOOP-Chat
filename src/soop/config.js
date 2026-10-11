@@ -6,20 +6,23 @@ export const DOMAIN = {
 
   live: 'https://live.sooplive.com',
   play: 'https://play.sooplive.com',
-  package: 'ws://localhost:21201/Websocket',
+  package: ['ws://localhost:26737/Websocket', 'ws://localhost:21201/Websocket'],
   chapi: 'https://chapi.sooplive.com',
+  search: 'https://sch.sooplive.com',
   channel: 'https://api-channel.sooplive.com',
   mobile: 'https://api.m.sooplive.com',
 
   vod: 'https://vod.sooplive.com',
-  clip: 'https://stbbs.sooplive.com',
 
   st: 'https://st.sooplive.com',
   res: 'https://res.sooplive.com',
   static: 'https://static.file.sooplive.com',
+  profile: 'https://stimg.sooplive.com',
+  thumbnail: 'https://liveimg.sooplive.com',
 
   ogq: 'https://ogq-sticker-global' + '-cdn-z01.sooplive.com',
-  market: 'https://ogqmarket.sooplive.com'
+  market: 'https://ogqmarket.sooplive.com',
+  ntfy: 'https://ntfy.sh'
 };
 
 export const QUALITY = {

@@ -1,0 +1,56 @@
+{
+	default_sni {$ADDRESS}
+}
+
+{$ADDRESS} {
+	bind {$BIND}
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+
+	@foreign {
+		header Origin *
+		not {
+			header Origin https://{$ADDRESS}
+			header Origin {$WEBORIGIN:https://localhost}
+		}
+	}
+	handle @foreign {
+		respond 403
+	}
+
+	@same {
+		header Origin https://{$ADDRESS}
+		header Origin {$WEBORIGIN:https://localhost}
+	}
+	@media path_regexp media ^/(?:[0-9]+/)?media/
+	header @media {
+		>Access-Control-Allow-Origin {$WEBORIGIN:https://localhost}
+		>Access-Control-Allow-Methods "GET, OPTIONS"
+		>Access-Control-Allow-Headers Range
+		>Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges"
+		>Vary Origin
+	}
+
+	@chat path_regexp chat ^/(?:[0-9]+/)?api/chat$
+	header @chat {
+		>Access-Control-Allow-Origin {$WEBORIGIN:https://localhost}
+		>Access-Control-Allow-Methods "GET, POST, OPTIONS"
+		>Access-Control-Allow-Headers "Authorization, Content-Type"
+		>Vary Origin
+	}
+	handle {
+		request_header @same Origin http://{$UPSTREAM}
+		@withoutHost not header X-Forwarded-Host *
+		request_header @withoutHost X-Forwarded-Host {host}
+
+		reverse_proxy {$UPSTREAM} {
+			header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+			header_up Host {upstream_hostport}
+			header_down Set-Cookie "(.*)" "$1; Secure"
+			flush_interval -1
+		}
+	}
+}

@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "SOOP Chat",
+  "short_name": "SOOP Chat",
+  "lang": "ko",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "prefer_related_applications": false,
+  "related_applications": [
+    { "platform": "webapp", "url": "/manifest.webmanifest", "id": "/" }
+  ],
+  "background_color": "#f5f5f5",
+  "theme_color": "#008cff",
+  "icons": [
+    { "src": "/app.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/app.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

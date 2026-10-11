@@ -13,6 +13,18 @@ export const USER_AGENT =
   + 'AppleWebKit/537.36 (KHTML, like Gecko) '
   + 'Chrome/148.0.0.0 Safari/537.36';
 
+const searchList = value => Array.isArray(value) ? value : [];
+
+function searchBadges(item) {
+  return {
+    subscribed: Number(item.subs_flag) > 0,
+    fan: Number(item.fan_flag) > 0,
+    emblem: item.emblem_img_url || '',
+    emblemGrade: item.emblem_grade || '',
+    emblemLevel: item.emblem_level || ''
+  };
+}
+
 export async function getStation(userId, options = {}) {
   const url = new URL(`/api/${encodeURIComponent(userId)}/station`, DOMAIN.chapi);
 
@@ -21,7 +33,184 @@ export async function getStation(userId, options = {}) {
     method: 'GET'
   });
 
+  if (json?.profile_image) json.profile_image = normalize(json.profile_image);
   return json;
+}
+
+export async function searchStreamers(keyword, page = 1, options = {}) {
+  keyword = String(keyword || '').trim();
+
+  if (!keyword || keyword.length > 100 || !Number.isInteger(page) || page < 1 || page > 100) {
+    throw new Error('검색 설정 오류');
+  }
+
+  const search = method => {
+    const url = new URL('/api.php', DOMAIN.search);
+
+    url.search = new URLSearchParams({
+      l: 'DF',
+      m: method,
+      v: method === 'bjSearch' ? '3.0' : '2.0',
+      c: 'UTF-8',
+      w: 'webk',
+      szType: 'json',
+      szOrder: 'score',
+      szKeyword: encodeURIComponent(keyword),
+      nPageNo: String(page),
+      nListCnt: '12',
+      onlyParent: '1',
+      isMobile: '0',
+      tab: method === 'bjSearch' ? 'bj' : 'live'
+    });
+
+    return requestJson(url, options);
+  };
+  const [streamers, live] = await Promise.all([search('bjSearch'), search('liveSearch')]);
+
+  if (Number(streamers?.RESULT) !== 1 || !Array.isArray(streamers.DATA)) {
+    throw new Error('스트리머 검색 실패');
+  }
+
+  const broadcasts = new Map(searchList(live?.REAL_BROAD).map(item => [item.user_id, item]));
+  const items = await Promise.all(streamers.DATA.map(async item => {
+    let broad = broadcasts.get(item.user_id);
+
+    if (!broad && Number(item.broad_no) > 0) {
+      const station = await getStation(item.user_id, options);
+
+      broad = station?.broad;
+    }
+
+    const number = Number(broad?.broad_no) || 0;
+
+    return {
+      id: item.user_id,
+      name: item.user_nick || item.user_id,
+      image: item.station_logo || '',
+      favorites: Number(item.favorite_cnt) || 0,
+      medal: item.medal_url || '',
+      ...searchBadges(item),
+      live: number > 0,
+      number,
+      title: broad?.broad_title || '',
+      viewers: Number(broad?.current_sum_viewer ?? broad?.total_view_cnt) || 0,
+      languages: broad?.lang_tags || [],
+      categories: broad?.category_tags || (broad?.broad_cate_name ? [broad.broad_cate_name] : []),
+      tags: broad?.hash_tags || [],
+      drops: Boolean(Number(broad?.is_drops))
+    };
+  }));
+
+  return { items, more: page * 12 < Number(streamers.TOTAL_CNT) };
+}
+
+export async function searchContents(keyword, page = 1, type = 'all', options = {}) {
+  if (!['all', 'live', 'vod', 'post', 'streamer'].includes(type)
+    || !keyword.trim() || keyword.length > 100 || !Number.isInteger(page) || page < 1 || page > 100) {
+    throw new Error('검색 설정 오류');
+  }
+
+  const search = (method, version, extra) => {
+    const url = new URL('/api.php', DOMAIN.search);
+    url.search = new URLSearchParams({
+      l: 'DF', m: method, v: version, w: 'webk', c: 'UTF-8', szType: 'json',
+      isMobile: '0', nPageNo: String(page), nListCnt: '12', szOrder: 'score',
+      szKeyword: encodeURIComponent(keyword), ...extra
+    });
+    return requestJson(url, options);
+  };
+    const [streamers, theme, vod, posts, live] = await Promise.allSettled([
+      ['all', 'streamer'].includes(type) ? searchStreamers(keyword, page, options) : null,
+    type === 'all' && page === 1
+      ? search('profileTheme', '6.0', { d: encodeURIComponent(keyword), pttype: 'all', tab: 'total', location: 'total_search' }) : null,
+    ['all', 'vod'].includes(type)
+      ? search('vodSearch', '5.0', { tab: type === 'all' ? 'TOTAL' : 'VOD', szFileType: 'ALL', szTerm: '1year', location: 'total_search' }) : null,
+    ['all', 'post'].includes(type)
+        ? search('postsSearch', '1.0', { tab: type === 'all' ? 'total' : 'post', szTerm: 'all', nUseFiltering: '1' }) : null,
+      ['all', 'live'].includes(type)
+        ? search('liveSearch', '2.0', { tab: type === 'all' ? 'total' : 'live', onlyParent: '1', location: 'total_search', isHashSearch: '0' }) : null
+  ]);
+  const value = result => result.status === 'fulfilled' ? result.value : null;
+  const people = value(streamers)?.items || [];
+  const themed = value(theme);
+  const videos = value(vod);
+  const articles = value(posts);
+  const video = item => ({
+    ...searchBadges(item),
+    id: String(item.title_no || ''), userId: item.user_id || '', name: item.user_nick || '',
+    title: item.title || '', image: item.thumbnail_path || item.mobile_thumbnail_path || '',
+    vertical: item.vertical_thumbnail_path || '', duration: item.duration || '',
+    views: Number(item.view_cnt) || 0, date: item.reg_date || '', type: item.file_type || '',
+    originalName: item.original_user_nick || '', tags: item.hash_tags || [],
+    languages: item.lang_tags || [], categories: item.category_tags || [],
+    url: new URL(item.file_type === 'CATCH_STORY'
+      ? `/player/${item.list_no}/catchstory` : `/player/${item.title_no}`, DOMAIN.vod).href
+  });
+    const related = item => item.recommend_type === 'BJ' ? ({
+      kind: 'streamer', id: item.user_id, name: item.user_nick,
+      ...searchBadges(item),
+      image: item.station_logo || '', favorites: Number(item.favorite_cnt) || 0
+    }) : (item.recommend_type === 'LIVE' || !item.recommend_type && !item.title_no && item.broad_no) ? ({
+    id: item.user_id || '', name: item.user_nick || item.user_id || '',
+    ...searchBadges(item),
+    image: item.broad_img || item.thumbnail_path || '', title: item.broad_title || item.title || '',
+    live: Boolean(item.broad_no), number: Number(item.broad_no) || 0,
+    viewers: Number(item.current_sum_viewer ?? item.total_view_cnt) || 0,
+    drops: Boolean(Number(item.is_drops)),
+      languages: item.lang_tags || [], categories: item.category_tags || [], tags: item.hash_tags || [], url: ''
+    }) : video(item);
+  const profiles = searchList(themed?.PROFILE).map(item => ({
+    id: item.user_id, name: item.user_nick, image: item.img_file,
+    favorites: Number(item.fan_count) || 0, notice: item.notice || '',
+    participants: item.view_count == null || item.view_count === '' ? null : Number(item.view_count),
+    noticeUrl: item.title_no ? new URL(`/station/${item.user_id}/post/${item.title_no}`, DOMAIN.soop).href : '',
+    medals: (Array.isArray(item.medal) ? item.medal : []).map(medal => ({
+      image: medal.simple_url || medal.basic_url || '',
+      name: medal.content || '', description: medal.description || ''
+    })).filter(medal => medal.image),
+    ...searchBadges(item)
+  }));
+  const banners = searchList(themed?.THEME).map(item => {
+    const html = String(item.html || '').replaceAll('&quot;', '"').replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>').replaceAll('&#39;', "'").replaceAll('&amp;', '&');
+    const links = [];
+    for (const match of html.matchAll(/<a\b([^>]*)>/gi)) {
+      const attributes = Object.fromEntries([...match[1].matchAll(/([\w-]+)\s*=\s*(["'])(.*?)\2/g)]
+        .map(value => [value[1].toLowerCase(), value[3]]));
+      let url;
+      try { url = new URL(attributes.href); } catch { continue; }
+      if (url.protocol !== 'https:' || !['sooplive.com', 'www.sooplive.com'].includes(url.hostname)
+        || !/^\/station\/[a-z0-9_]+\/?$/i.test(url.pathname)) continue;
+      const bounds = Object.fromEntries([...String(attributes.style || '').matchAll(/(?:^|;)\s*(top|left|width|height)\s*:\s*(\d+(?:\.\d+)?)%/gi)]
+        .map(value => [value[1].toLowerCase(), Number(value[2])]));
+      if (!['top', 'left', 'width', 'height'].every(key => Number.isFinite(bounds[key]) && bounds[key] >= 0)
+        || bounds.width <= 0 || bounds.height <= 0
+        || bounds.left + bounds.width > 100 || bounds.top + bounds.height > 100) continue;
+      links.push({ url: url.href, title: attributes.title || item.title || '', ...bounds });
+    }
+    return { title: item.title || '', image: html.match(/src="([^"]+)"/)?.[1] || '', links };
+  }).filter(item => item.image);
+    const broadcasts = value(live);
+    const more = type === 'live' ? Boolean(broadcasts?.HAS_MORE_LIST)
+      : type === 'streamer' ? Boolean(value(streamers)?.more)
+    : type === 'vod' ? Boolean(videos?.HAS_MORE_LIST)
+      : type === 'post' ? page * 12 < Number(articles?.TOTAL_CNT) : false;
+    if ([streamers, theme, vod, posts, live].every(result => result.status === 'rejected' || !result.value)) {
+    throw new Error('검색 결과를 불러오지 못했습니다');
+  }
+  return {
+      profiles, live: searchList(broadcasts?.REAL_BROAD).map(related), latest: searchList(themed?.LATEST_VOD).map(video),
+    banners, related: searchList(themed?.RECOMMEND_CONTENTS).map(related),
+    stories: searchList(videos?.CATCH_STORY_DATA).map(video), vod: searchList(videos?.DATA).map(video),
+    posts: searchList(articles?.DATA).map(item => ({
+      ...searchBadges(item),
+      id: String(item.title_no), userId: item.user_id, name: item.user_nick,
+      station: item.station_name || '', title: item.title || '', content: item.content || '',
+      image: item.thumbnail || '', profile: item.station_logo || '', date: item.reg_date || '',
+      views: Number(item.view_cnt) || 0,
+      url: new URL(`/station/${item.station_user_id}/post/${item.title_no}`, DOMAIN.soop).href
+    })), streamers: people, more
+  };
 }
 
 export async function getStatus(userId, options = {}) {
@@ -35,6 +224,58 @@ export async function getStatus(userId, options = {}) {
   });
 
   return json;
+}
+
+export async function getUpStatus(bjId, broadNo, options = {}) {
+  if (!options.cookie || !bjId || !broadNo) return null;
+  const url = new URL('/api/ok_api.php', DOMAIN.live);
+  url.search = new URLSearchParams({ szWork: 'createCode', szFileType: 'jsonp',
+    szBjId: bjId, nBroadNo: String(broadNo), szCallBack: 'callback', _: String(Date.now()) });
+  const text = await requestText(url, { ...options, method: 'GET',
+    headers: { ...options.headers, Referer: `${DOMAIN.play}/${bjId}/${broadNo}` } });
+  const value = text?.trim().replace(/^callback\s*\(/, '').replace(/\);?\s*$/, '');
+  const data = JSON.parse(value || 'null');
+  if (Number(data?.RESULT) === -3) return true;
+  return null;
+}
+
+export async function postReaction(bjId, broadNo, action, options = {}) {
+  const call = async (route, data, method = 'GET') => {
+    const url = new URL(route, DOMAIN.live);
+    const params = new URLSearchParams({ ...data, callback: 'callback', szCallBack: 'callback', _: String(Date.now()) });
+    if (method === 'GET') url.search = params;
+    const text = await requestText(url, {
+      ...options, method, body: method === 'POST' ? params.toString() : undefined,
+      headers: { ...options.headers, Referer: `${DOMAIN.play}/${bjId}/${broadNo || ''}` }
+    });
+    const value = text?.trim().replace(/^callback\s*\(/, '').replace(/\);?\s*$/, '');
+    if (route === '/afreeca/favorite_list_api.php') {
+      const result = value?.match(/"CHANNEL"\s*:\s*\{\s*"RESULT"\s*:\s*"?(-?\d+)"?\s*[,}]/);
+      if (!result) throw new Error('즐겨찾기 응답을 확인할 수 없습니다.');
+      return { CHANNEL: { RESULT: Number(result[1]) } };
+    }
+    return JSON.parse(value || 'null');
+  };
+  if (action === 'favorite') {
+    const data = { szBjId: bjId, szFrom: 'html5', szLocation: 'live', szClub: 'y' };
+    const route = '/afreeca/favorite_list_api.php';
+    const checked = await call(route, { ...data, szWork: 'CHECKFAVORITE' });
+    const remove = typeof options.active === 'boolean' ? !options.active : Number(checked?.CHANNEL?.RESULT) === -5;
+    const result = await call(route, { ...data, szWork: remove ? 'DELFAVORITE' : 'ADDFAVORITE' }, remove ? 'POST' : 'GET');
+    if (Number(result?.CHANNEL?.RESULT) !== 1) throw new Error('즐겨찾기를 변경하지 못했습니다.');
+    return { active: !remove };
+  }
+  if (action === 'up' && broadNo) {
+    const data = { szBjId: bjId, nBroadNo: String(broadNo), szFileType: 'jsonp' };
+    const code = await call('/api/ok_api.php', { ...data, szWork: 'createCode' });
+    if (Number(code?.RESULT) !== 1 && String(code?.MSG || '').includes('이미 UP')) return { active: true };
+    if (Number(code?.RESULT) !== 1) throw new Error(code?.MSG || 'UP을 보낼 수 없습니다.');
+    const result = await call('/api/ok_api.php', { ...data, szWork: 'sendOk', szData: code.MSG, szPlayerType: 'html5' });
+    if (Number(result?.RESULT) !== 1 && String(result?.MSG || '').includes('이미 UP')) return { active: true };
+    if (Number(result?.RESULT) !== 1) throw new Error(result?.MSG || 'UP을 보낼 수 없습니다.');
+    return { active: true };
+  }
+  throw new Error('요청 오류');
 }
 
 export async function getEmblem(userId, options = {}) {
@@ -148,6 +389,11 @@ export async function getStream(bjId, quality = 'hd', options = {}) {
     }
 
     return null;
+  }
+
+  if (quality === 'best') {
+    quality = channel.VIEWPRESET?.filter(item => item.name !== 'auto')
+      .sort((a, b) => (Number.parseInt(b.label, 10) || 0) - (Number.parseInt(a.label, 10) || 0))[0]?.name || 'hd';
   }
 
   const preset = channel.VIEWPRESET?.find(
@@ -334,6 +580,98 @@ export async function postRule(message, display, options = {}) {
   return result;
 }
 
+export async function getHome(options = {}) {
+  const logged = Boolean(options.cookie?.BbsTicket);
+  const live = new URL(logged
+    ? '/api/myplus/preferbjLiveVodController.php'
+    : '/pc/ko_KR/main_popular_list.js', logged ? DOMAIN.live : DOMAIN.static);
+  const urls = logged ? [live,
+    new URL('/api/myplus/myplusCatchController.php', DOMAIN.live),
+    new URL('/api/myplus/myplusCatchStoryController.php', DOMAIN.live),
+    new URL('/pc/ko_KR/main_popular_list.js', DOMAIN.static)
+  ] : [live];
+  const results = await Promise.allSettled(urls.map(url => requestJson(url, options)));
+  const result = results[0].status === 'fulfilled' ? results[0].value : null;
+
+  if (Number(result?.RESULT) !== 1) {
+    throw new Error('방송 목록을 불러오지 못했습니다.');
+  }
+
+  const image = value => {
+    if (!value) {
+      return '';
+    }
+
+    try {
+      const url = new URL(value, DOMAIN.soop);
+
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        return '';
+      }
+
+      url.protocol = 'https:';
+
+      return url.href;
+    } catch {
+      return '';
+    }
+  };
+  const items = (list, kind) => {
+    const seen = new Set();
+    const identity = item => String((kind === 'live'
+      ? item.user_id : item.original_user_id || item.user_id || item.bj_id) || '');
+
+    return (list || []).filter(item => {
+      const key = kind === 'live' ? item.broad_no : item.title_no || item.rep_title_no;
+
+      if (!key || seen.has(key) || kind === 'live' && !identity(item)) {
+        return false;
+      }
+
+      seen.add(key);
+
+      return true;
+    }).map(item => ({
+      id: identity(item),
+      number: kind === 'live' ? item.broad_no : item.title_no || item.rep_title_no,
+      name: item.user_nick || item.original_user_nick || item.bj_nick || '',
+      title: item.broad_title || item.title_name || item.title || item.original_user_nick || '',
+      image: image(item.broad_thumb || item.thumb || item.thumbnail || ''),
+      profile: image(item.profile_img || item.user_profile_img || (identity(item) ? new URL(
+        `/LOGO/${identity(item).slice(0, 2)}/${encodeURIComponent(identity(item))}/m/`
+        + `${encodeURIComponent(identity(item))}.webp`, DOMAIN.profile
+      ).href : '')),
+      emblem: image(item.emblem_img_url || ''),
+      emblemGrade: item.emblem_grade || '',
+      emblemLevel: item.emblem_level || '',
+      viewers: Number(item.total_view_cnt || item.view_cnt || 0),
+      languages: item.lang_tags || [],
+      categories: item.category_tags || [],
+      hashtags: item.hash_tags || [],
+      tags: [...(item.lang_tags || []), ...(item.category_tags || []), ...(item.hash_tags || [])],
+      drops: Boolean(Number(item.is_drops)),
+      subtitle: Boolean(item.is_subtitle),
+      adult: Number(item.broad_grade || item.grade) >= 19,
+      password: item.is_password === 'Y',
+      date: item.broad_date || ''
+    }));
+  };
+  const extra = index => results[index]?.status === 'fulfilled'
+    && Number(results[index].value?.RESULT) === 1
+    ? results[index].value.DATA?.list || [] : [];
+  const popular = logged ? results[3]?.status === 'fulfilled' ? results[3].value : null : result;
+
+  return {
+    personalized: logged,
+    popular: items(Array.isArray(popular?.DATA) ? popular.DATA.flatMap(group => group.DATA || []) : [], 'live')
+      .sort((left, right) => right.viewers - left.viewers),
+    live: items(logged ? result.DATA.live_list : result.DATA.flatMap(group => group.DATA || []), 'live'),
+    vod: items(logged ? result.DATA.vod_list : [], 'vod'),
+    catch: items(extra(1), 'catch'),
+    story: items(extra(2), 'story')
+  };
+}
+
 export async function getMyPlus(options = {}) {
   const url = new URL('/api/myplus/preferbjOnLnbController.php', DOMAIN.live);
 
@@ -397,6 +735,23 @@ export async function getVodContent(titleNo, options = {}) {
   const result = { status: valid ? 200 : null, data: json?.data, removed };
 
   return result;
+}
+
+export async function getVodStream(titleNo, options = {}) {
+  const result = await getVodContent(titleNo, options);
+  const file = result.status === 200 && result.data?.files?.find(item => item.hide !== 'Y' && item.file);
+  if (!file) return null;
+  const qualities = (file.quality_info || []).filter(item => item.file && item.name !== 'adaptive');
+  const selected = qualities.find(item => item.name === 'hd')
+    || qualities.sort((left, right) => (Number.parseInt(left.label) || Infinity)
+      - (Number.parseInt(right.label) || Infinity))[0];
+  const url = new URL(selected?.file || file.file);
+  if (!['http:', 'https:'].includes(url.protocol)) return null;
+  return {
+    url: url.href,
+    format: /\.m3u8(?:\?|$)/i.test(url.href) ? 'hls' : 'video',
+    headers: { Referer: new URL(`/player/${titleNo}`, DOMAIN.vod).href, 'User-Agent': USER_AGENT }
+  };
 }
 
 export async function getBoard(

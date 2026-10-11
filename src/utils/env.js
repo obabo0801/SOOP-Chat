@@ -26,7 +26,20 @@ export function parseEnv(name, show = true) {
         '',
         'HOST="127.0.0.1"',
         'PORT="0"',
-        'ORIGINS=""'
+        'ORIGINS=""',
+        'ACCESSPW=""',
+        '',
+        'NTFYTOPIC=""',
+        'NTFYTOKEN=""',
+        'DEVTOPIC=""',
+        'PUSHPUBLIC=""',
+        'PUSHPRIVATE=""',
+        '',
+        'SERVER=""',
+        'WEBORIGIN=""',
+        'ADDRESS=""',
+        'BIND=""',
+        'UPSTREAM=""'
       ].join('\n') + '\n';
 
     try {
@@ -47,6 +60,10 @@ export function parseEnv(name, show = true) {
     Object.assign(process.env, parsed);
 
     for (const k in parsed) {
+      if (['ACCESSPW', 'PUSHPUBLIC', 'PUSHPRIVATE'].includes(k)) {
+        continue;
+      }
+
       const value = decode(process.env[k]);
 
       if (value !== null) {

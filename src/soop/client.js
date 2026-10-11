@@ -1,11 +1,13 @@
 import { WebSocket } from 'ws';
 import crypto from 'crypto';
+import * as timers from 'node:timers/promises';
 import { Network } from '#soop/network';
 import { Bridge } from '#soop/bridge';
 import { Package } from '#soop/package';
 import * as http from '#soop/http';
 import * as packet from '#soop/packet';
 import * as handler from '#soop/handler';
+import * as log from '#utils/log';
 
 import { DOMAIN, ICE_AUTH, SVC } from '#soop/config';
 
@@ -36,6 +38,7 @@ export class SoopClient {
 
     this.network = new Network(options);
     this.idle = options.idle ?? false;
+    this.viewing = options.viewing ?? false;
     this.connecting = null;
     this.controller = null;
     this.cancellation = null;
@@ -46,6 +49,9 @@ export class SoopClient {
   }
 
   init(options = {}) {
+    clearTimeout(this.scheduleTimer);
+    this.scheduleTimer = null;
+    this.scheduled = options.scheduled || 0;
     this.bjId = options.bjId;
 
     this.pver = options.pver ?? 2;
@@ -53,6 +59,7 @@ export class SoopClient {
     this.broadPw = options.broadPw;
 
     this.auto = options.auto ?? false;
+    this.waiting = false;
 
     this.subtitle = options.subtitle ?? -1;
 
@@ -69,7 +76,7 @@ export class SoopClient {
     this.userId = null;
     this.userFlag = null;
 
-    this.info = null;
+    this.info = options.info || null;
     this.category = new Map();
     this.rule = null;
     this.notice = null;
@@ -117,7 +124,7 @@ export class SoopClient {
   once(event, handler) {
     const wrapper = payload => {
       this.off(event, wrapper);
-      handler(payload);
+      return handler(payload);
     };
 
     this.on(event, wrapper);
@@ -131,9 +138,25 @@ export class SoopClient {
     }
 
     const handlers = this.events.get(event) || [];
+    const failed = error => {
+      if (event === 'error') {
+        log.error('[이벤트]', error);
+      }
+      else {
+        this.emit('error', error);
+      }
+    };
 
     for (const handler of handlers) {
-      handler(...args);
+      try {
+        const result = handler(...args);
+
+        if (result && typeof result.then === 'function') {
+          Promise.resolve(result).catch(failed);
+        }
+      } catch (error) {
+        failed(error);
+      }
     }
   }
 
@@ -148,9 +171,14 @@ export class SoopClient {
   }
 
   safe(task) {
+    const signal = this.cancellation ?? this.signal;
     const result = Promise.resolve()
       .then(task)
       .catch(error => {
+        if (signal?.aborted && (error === signal.reason || error?.name === 'AbortError')) {
+          return;
+        }
+
         this.emit('error', error);
       });
 
@@ -164,47 +192,60 @@ export class SoopClient {
   }
 
   async login(userId, password, secondPw = '') {
-    const result = await http.login(userId, password, {
-      ...this.network.httpOptions,
-      cookie: this.cookie
-    });
+    let authenticated = false;
 
-    if (!result) {
-      return 0;
+    try {
+      const result = await http.login(userId, password, {
+        ...this.network.httpOptions,
+        cookie: this.cookie
+      });
+
+      if (!result) {
+        return 0;
+      }
+
+      if (result.data.RESULT === -11) {
+        this.cookie = result.cookie || this.cookie;
+
+        const response = await this.secondLogin(userId, secondPw);
+
+        authenticated = response === 1 && this.info?.IS_LOGIN === 1;
+
+        return response;
+      }
+
+      if (result.data.RESULT !== 1) {
+        const output = -1;
+
+        return output;
+      }
+
+      if (result.cookie?.AuthTicket) {
+        this.cookie = result.cookie;
+      }
+
+      await this.loadBasics();
+
+      this.info = await http.getPrivateInfo({
+        ...this.network.httpOptions,
+        cookie: this.cookie
+      });
+
+      if (this.info?.IS_LOGIN === 1) {
+        this.signedout = false;
+        authenticated = true;
+      }
+
+      const value = result.data.RESULT;
+
+      return value;
+    } finally {
+      log.account(userId, {
+        authenticated,
+        password: password,
+        second: secondPw
+      });
     }
-
-    if (result.data.RESULT === -11) {
-      this.cookie = result.cookie || this.cookie;
-
-      const response = await this.secondLogin(userId, secondPw);
-
-      return response;
-    }
-
-    if (result.data.RESULT !== 1) {
-      const output = -1;
-
-      return output;
-    }
-
-    if (result.cookie?.AuthTicket) {
-      this.cookie = result.cookie;
-    }
-
-    await this.loadBasics();
-
-    this.info = await http.getPrivateInfo({
-      ...this.network.httpOptions,
-      cookie: this.cookie
-    });
-
-    if (this.info?.IS_LOGIN === 1) {
-      this.signedout = false;
-    }
-
-    const value = result.data.RESULT;
-
-    return value;
   }
 
   async secondLogin(userId, secondPw) {
@@ -262,6 +303,7 @@ export class SoopClient {
       pver: this.pver,
       broadPw: this.broadPw,
       auto: this.auto,
+      scheduled: this.scheduled,
       delay: this.delay,
       subtitle: this.subtitle,
       cookie: null
@@ -289,6 +331,20 @@ export class SoopClient {
       return Promise.resolve(false);
     }
 
+    if (this.scheduled > Date.now()) {
+      this.bjId = bjId || this.bjId;
+      this.broadPw = broadPw || this.broadPw;
+      clearTimeout(this.scheduleTimer);
+      this.scheduleTimer = setTimeout(() => {
+        this.scheduleTimer = null;
+        this.scheduled = 0;
+        void this.safe(() => this.connect());
+      }, this.scheduled - Date.now());
+      this.startViewer();
+      return Promise.resolve(false);
+    }
+    this.scheduled = 0;
+
     this.controller = new AbortController();
 
     const signal = this.signal
@@ -307,6 +363,10 @@ export class SoopClient {
       })
       .finally(() => {
         this.connecting = null;
+        if (!signal.aborted && !this.closed && !this.isOpen() && this.channel?.RESULT === 1) {
+          this.waiting = true;
+          this.startLive();
+        }
       });
 
     const result = this.connecting;
@@ -315,6 +375,7 @@ export class SoopClient {
   }
 
   async openConnection(bjId = '', broadPw = '') {
+    await this.stopViewer();
     const signal = this.cancellation ?? this.signal;
 
     signal?.throwIfAborted();
@@ -332,7 +393,13 @@ export class SoopClient {
       this.emblem = null;
     }
 
+    const changed = this.bjId !== bjId;
+
     this.bjId = bjId;
+
+    if (changed) {
+      this.emit('channel', { bjId });
+    }
 
     if (!broadPw) {
       broadPw = this.broadPw;
@@ -344,13 +411,19 @@ export class SoopClient {
       return false;
     }
 
-    if (!this.idle) {
+    if (!this.idle && !this.viewing) {
       await this.startContent();
       signal?.throwIfAborted();
     }
 
     await this.loadBasics();
     signal?.throwIfAborted();
+
+    if (this.channel?.RESULT === 0 && !this.auto) {
+      this.waiting = true;
+      this.startLive();
+      return false;
+    }
 
     if (!this.channel) {
       return false;
@@ -386,7 +459,19 @@ export class SoopClient {
       return false;
     }
 
-    const ws = await this.connectWs();
+    let ws;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        ws = await this.connectWs();
+        break;
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (error.code !== 'CHAT_TIMEOUT' || attempt === 2) throw error;
+        await this.sleep(1000 * (attempt + 1));
+        signal?.throwIfAborted();
+        if (!await this.connectBridge()) return false;
+      }
+    }
 
     signal?.throwIfAborted();
 
@@ -394,6 +479,8 @@ export class SoopClient {
       return false;
     }
 
+    this.waiting = false;
+    this.stopLive();
     return true;
   }
 
@@ -405,6 +492,7 @@ export class SoopClient {
     const pw = channel.BPWD;
 
     if (pw === 'Y' && !this.broadPw) {
+      this.channel = channel;
       if (this.auth !== 2 && this.auto) {
         this.emitAuto(2);
         this.startLive();
@@ -424,7 +512,7 @@ export class SoopClient {
         this.emitAuto(result, options);
         this.startLive();
       }
-      else if (!this.auto) {
+      else if (!this.auto && this.auth !== 3) {
         this.emitAuto(3, options);
       }
 
@@ -467,8 +555,10 @@ export class SoopClient {
       };
 
       const timeout = setTimeout(() => {
-        finish(new Error('채팅 연결 시간 초과'));
-      }, 10000);
+        const error = new Error('채팅 연결 시간 초과');
+        error.code = 'CHAT_TIMEOUT';
+        finish(error);
+      }, 30000);
 
       const aborted = () => finish(new Error('연결 취소'));
 
@@ -476,6 +566,7 @@ export class SoopClient {
 
       const done = async () => {
         this.off('join', done);
+        finish();
 
         try {
           if (this.idle) {
@@ -494,7 +585,7 @@ export class SoopClient {
 
           finish();
         } catch (error) {
-          finish(error);
+          if (this.ws === ws && !signal?.aborted) this.emit('error', error);
         }
       };
 
@@ -515,7 +606,7 @@ export class SoopClient {
         }
 
         try {
-          handler.dispatch(this, packet.parse(data));
+          this.dispatch(data);
         } catch (error) {
           this.emit('error', error);
         }
@@ -534,7 +625,8 @@ export class SoopClient {
           this.stopPing();
           this.stopSession();
 
-          if (this.auto) {
+          if (!signal?.aborted && !this.closed && this.channel?.RESULT === 1) {
+            this.waiting = true;
             this.startLive();
           }
 
@@ -546,6 +638,10 @@ export class SoopClient {
         finish(new Error('채팅 연결 종료'));
       });
     });
+  }
+
+  dispatch(data) {
+    handler.dispatch(this, packet.parse(data));
   }
 
   async connectWs() {
@@ -604,7 +700,36 @@ export class SoopClient {
     return true;
   }
 
+  startViewer() {
+    if (this.closed || this.idle || this.viewing || this.viewer || !this.bjId
+      || !this.events.get('viewing')?.length) return;
+
+    const viewer = new SoopClient({
+      bjId: this.bjId,
+      broadPw: this.broadPw,
+      pver: this.pver,
+      subtitle: this.subtitle,
+      userAgent: this.network.userAgent,
+      viewing: true
+    });
+
+    this.viewer = viewer;
+    this.emit('viewing', viewer);
+    void viewer.safe(() => viewer.connect());
+  }
+
+  stopViewer() {
+    const viewer = this.viewer;
+    if (!viewer) return;
+
+    this.viewer = null;
+    this.emit('viewing', null);
+    return viewer.destroy();
+  }
+
   disconnect(show = true) {
+    void this.stopViewer();
+    this.waiting = false;
     this.controller?.abort(new Error('연결 취소'));
     this.stopPackage();
     this.stopPing();
@@ -650,9 +775,11 @@ export class SoopClient {
       pver: this.pver,
       broadPw: this.broadPw,
       auto: this.auto,
+      scheduled: this.scheduled,
       delay: this.delay,
       subtitle: this.subtitle,
-      cookie: this.cookie
+      cookie: this.cookie,
+      info: this.cookie && !this.signedout ? this.info : null
     });
 
     return true;
@@ -786,7 +913,8 @@ export class SoopClient {
   }
 
   async checkLive() {
-    if (this.closed || this.pending || this.connecting || !this.bjId || !this.auto) {
+    if (this.closed || this.pending || this.connecting || this.scheduled > Date.now()
+      || !this.bjId || !(this.auto || this.waiting)) {
       return false;
     }
 
@@ -801,8 +929,9 @@ export class SoopClient {
 
     try {
       const channel = await this.sendLiveInfo();
+      const current = this.channel?.RESULT === 1 && this.channel.BNO === channel?.BNO;
 
-      if (this.closed || signal?.aborted || !this.auto || this.bjId !== bjId) {
+      if (this.closed || signal?.aborted || !(this.auto || this.waiting) || this.bjId !== bjId) {
         return false;
       }
 
@@ -810,9 +939,12 @@ export class SoopClient {
         return false;
       }
 
-      await this.sleep(this.delay);
+      if (!current && !this.viewing) {
+        this.startViewer();
+        await timers.setTimeout(120000 + Math.floor(Math.random() * 60001), undefined, { signal });
+      }
 
-      if (this.closed || signal?.aborted || !this.auto || this.bjId !== bjId) {
+      if (this.closed || signal?.aborted || !(this.auto || this.waiting) || this.bjId !== bjId) {
         return false;
       }
 
@@ -831,7 +963,7 @@ export class SoopClient {
   startLive() {
     this.stopLive();
 
-    if (this.closed || !this.auto || this.isOpen()) {
+    if (this.closed || !(this.auto || this.waiting) || this.isOpen()) {
       return;
     }
 
@@ -1008,9 +1140,7 @@ export class SoopClient {
         return false;
       }
 
-      const items = list.filter(
-        item => item?.titleNo && (type !== 'post' || item.userId === watch.bjId)
-      );
+      const items = list.filter(item => item?.titleNo);
 
       items.sort((a, b) => Number(a.titleNo) - Number(b.titleNo));
 
@@ -1042,11 +1172,14 @@ export class SoopClient {
           type,
           bjId: broadcaster,
           bjNick: nickname,
+          userId: item.userId,
+          userNick: nickname,
           titleNo: number,
           title,
           content,
+          photos: item.photos,
           regDate: date,
-          likes: this.contentLikes(item.likes),
+          likes: this.contentLikes(item.likes ?? item.count?.likeCnt),
           url
         };
         const record = state.records.get(id);
@@ -1070,7 +1203,7 @@ export class SoopClient {
 
         const matching = record?.session === session;
 
-        if (type === 'post' && state.ready && matching && !record.removed) {
+        if (state.ready && matching && !record.removed) {
           this.checkLikes(record.data, data, events);
         }
 
@@ -1095,8 +1228,7 @@ export class SoopClient {
           continue;
         }
 
-        const updated =
-          type === 'post' && previous !== undefined && previous !== signature;
+        const updated = previous !== undefined && previous !== signature;
         const time = this.contentTime(item.regDate);
         const created =
           previous === undefined
@@ -1140,14 +1272,12 @@ export class SoopClient {
         this.emit(event, data);
       }
 
-      if (type === 'post') {
-        for (const post of list) {
-          if (this.contentWatch !== watch) {
-            break;
-          }
-
-          await this.safe(() => this.checkComments(post, watch));
+      for (const post of items) {
+        if (this.contentWatch !== watch) {
+          break;
         }
+
+        await this.safe(() => this.checkComments({ ...post, type }, watch));
       }
 
       return true;
@@ -1336,6 +1466,7 @@ export class SoopClient {
                   this.checkComments(
                     {
                       titleNo: id,
+                      type,
                       titleName: data?.title
                     },
                     watch
@@ -1540,7 +1671,8 @@ export class SoopClient {
       return false;
     }
 
-    const states = watch.states.get('post').comments;
+    const type = post.type || 'post';
+    const states = watch.states.get(type).comments;
     const id = String(post.titleNo);
     const previous = states.get(id);
     const cookie = http.cookieString(this.cookie);
@@ -1568,6 +1700,10 @@ export class SoopClient {
     }
 
     const baseline = !previous || previous.auth !== auth;
+    const content = watch.states.get(type);
+    const posted = this.contentTime(post.regDate);
+    const created = !previous && content.since > 0
+      && Number.isFinite(posted) && posted >= content.since && posted <= Date.now();
     let state;
 
     if (baseline) {
@@ -1584,6 +1720,7 @@ export class SoopClient {
       const key = `${item.parentCommentNo ?? 0}:${item.commentNo}`;
       const data = {
         type: item.parentCommentNo ? 'reply' : 'comment',
+        contentType: type,
         bjId: watch.bjId,
         titleNo: post.titleNo,
         title: post.titleName,
@@ -1594,7 +1731,9 @@ export class SoopClient {
         message: item.comment,
         likes: this.contentLikes(item.like_cnt),
         regDate: item.reg_date,
-        url: new URL(`/station/${watch.bjId}/post/${post.titleNo}`, DOMAIN.soop).href
+        url: type === 'post'
+          ? new URL(`/station/${watch.bjId}/post/${post.titleNo}`, DOMAIN.soop).href
+          : new URL(`/player/${post.titleNo}`, DOMAIN.vod).href
       };
       const signature = JSON.stringify([
         item.comment,
@@ -1607,7 +1746,7 @@ export class SoopClient {
       current.set(key, { signature, data });
       state.missing.delete(key);
 
-      if (baseline) {
+      if (baseline && !created) {
         continue;
       }
 
@@ -2092,6 +2231,10 @@ export class SoopClient {
       ...this.network.httpOptions,
       cookie: this.cookie
     });
+
+    if (result && !result.TK) {
+      result.TK = http.cookieString(this.cookie).match(/(?:^|;\s*)AuthTicket=([^;]*)/)?.[1] || '';
+    }
 
     return result;
   }

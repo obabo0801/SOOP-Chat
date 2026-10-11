@@ -68,7 +68,7 @@ web_modules/
 # dotenv environment variable files
 .env
 .env.*
-!.env.example
+.vercel/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -150,4 +150,8 @@ vite.config.ts.timestamp-*
 /tenants.json
 /notifications.json
 /macros.json
+/macros/
+/notifications/
 /update.bat
+/private.log
+/sessions/

@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { checkFlag, userInfo, SUBTITLE_LANG } from '#soop/handler';
+import { USER_FLAG1 } from '#soop/config';
 import * as time from '#utils/time';
+import * as notify from './notify.js';
 
 const gifts = {
   balloon: '별풍선',
@@ -33,27 +35,68 @@ export class Chat {
     this.pages = new Set();
     this.requests = new Set();
     this.closed = false;
+    this.settlement = null;
     this.flag = null;
+    this.broadNo = client.isOpen?.() ? Number(client.channel?.BNO || 0) : 0;
+    this.since = this.broadNo ? Date.now() - 1 : 0;
     this.slow = 0;
     this.frozen = Boolean(client.iceMode);
     this.ice = { auth: [true, false, false, false, false, true], count: 1, date: 1 };
     this.poll = [1, 3, 4].includes(client.poll?.status) ? client.poll : null;
 
     this.on('chat', data => this.add('chat', data));
+    this.on('directChat', data => {
+      const incoming = data.type === 1;
+
+      this.add('whisper', {
+        ...data,
+        userId: incoming ? data.fromId : data.toId,
+        userNick: incoming ? data.fromNick : data.toNick || data.toId,
+        userFlag: incoming ? data.userFlag : undefined,
+        role: incoming ? data.role : undefined,
+        tier: incoming ? data.tier : undefined,
+        tierName: incoming ? data.tierName : undefined,
+        direction: incoming ? 'incoming' : 'outgoing'
+      });
+    });
     this.on('managerChat', data => {
       if (this.state().manager) {
         this.add('manager', data);
       }
     });
     this.on('ogq', data => this.add('ogq', data));
+    for (const [event, action] of Object.entries({ post: '작성', edit: '수정', clip: '작성', catch: '작성', remove: '삭제' })) {
+      this.on(event, data => {
+        const category = data.type || event;
+        if (!['post', 'clip', 'catch'].includes(category)) return;
+        const label = { post: '게시글', clip: '클립', catch: '캐치' }[category];
+        this.add('content', { ...data, category,
+          message: [`[${label} ${action}] ${data.title || '제목 없음'}`,
+            notify.preview(data.content, Infinity), data.url].filter(Boolean).join('\n'),
+          stickers: notify.stickers(data.content), images: notify.images(data.content, data.photos) });
+      });
+    }
     this.on('subtitle', data => this.add('subtitle', data));
     this.on('system', data => this.add('system', { message: data.message || data }));
     this.on('error', error => {
       this.add('error', { message: error?.message || String(error) });
     });
+    this.on('macro', data => {
+      if (['send', 'edit'].includes(data.type)) {
+        this.add('macro', {
+          ...data,
+          activity: data.type,
+          message: data.type === 'send'
+            ? `[${data.rule || '매크로'}] ${data.message || '실행 완료'}` : data.message
+        });
+      }
+    });
     this.on('live', data => {
+      if (data.code === 0) {
+        return;
+      }
+
       const messages = {
-        0: '방송 연결을 기다립니다.',
         2: '방송 비밀번호가 필요합니다.',
         3: '방송이 오프라인입니다.'
       };
@@ -63,6 +106,12 @@ export class Chat {
       }
     });
     this.on('join', () => {
+      const number = Number(this.client.channel?.BNO || 0);
+      if (number && number !== this.broadNo) {
+        this.broadNo = number;
+        this.since = Date.now() - 1;
+      }
+      this.settlement = null;
       this.flag = null;
       this.slow = 0;
       this.frozen = false;
@@ -91,12 +140,7 @@ export class Chat {
 
       this.broadcast('state', this.state());
     });
-    this.on('userExtend', data => {
-      const user = this.user({ userId: data.id, ...data });
-
-      this.users.set(user.id, data);
-      this.broadcast('user', user);
-    });
+    this.on('userExtend', data => this.extend(data));
     for (const event of ['userFlag', 'subBj']) {
       this.on(event, data => {
         if (data.userId === this.client.userId && data.flag) {
@@ -201,7 +245,8 @@ export class Chat {
         tier: data.user.tier,
         subMonth: data.user.fw,
         accMonth: data.user.afw,
-        message
+        message,
+        category: 'presence'
       });
     });
 
@@ -309,7 +354,7 @@ export class Chat {
         return;
       }
 
-      const message = `[금칙어] ${words.join(', ')}`;
+      const message = `[금칙어] ${words.join(', ')} → ${data.before || ''}`;
 
       this.system(message);
     });
@@ -351,7 +396,7 @@ export class Chat {
       };
 
       if (messages[data.status]) {
-        this.system(messages[data.status]);
+        this.system(messages[data.status], 'poll');
       }
     });
     this.on('quit', data => {
@@ -370,6 +415,32 @@ export class Chat {
     for (const event of Object.keys(gifts)) {
       this.on(event, data => this.gift(event, data));
     }
+    this.watchViewer();
+  }
+
+  watchViewer() {
+    if (this.viewingHandler || this.closed) return;
+
+    this.owner = this.client;
+    this.viewingHandler = client => this.bind(client || this.owner);
+    this.owner.on('viewing', this.viewingHandler);
+    if (this.owner.viewer) this.bind(this.owner.viewer);
+  }
+
+  bind(client) {
+    if (this.closed || this.client === client) return;
+
+    for (const [event, handler] of this.events) {
+      if (['macro', 'post', 'edit', 'clip', 'catch', 'remove'].includes(event)) continue;
+      this.client.off(event, handler);
+      client.on(event, handler);
+    }
+
+    this.client = client;
+    this.flag = null;
+    this.users.clear();
+    this.kicked.clear();
+    this.broadcast('state', this.state());
   }
 
   on(event, handler) {
@@ -392,9 +463,13 @@ export class Chat {
 
     return {
       login,
+      logout: !login || this.client.info.LOGIN_ID !== this.basicAccount,
       connected,
+      since: this.since,
       viewers,
       manager,
+      managerHistory: login && !connected,
+      receive: !flag.isBlock,
       ice: Boolean(this.client.iceMode),
       freezing: this.ice,
       slow: this.slow,
@@ -413,15 +488,19 @@ export class Chat {
 
   user(data = {}) {
     const id = String(data.userId || data.fromId || '');
-    const current = this.client.userList?.get(id) || {};
-    const cached = this.users.get(id) || {};
-    const fw = current.fw > 0 ? current.fw : cached.fw;
-    const afw = current.afw > 0 ? current.afw : cached.afw;
+    const stationId = id.replace(/\(\d+\)$/, '');
+    const matching = values => id && [...values || []].find(([key]) =>
+      key.replace(/\(\d+\)$/, '') === stationId)?.[1];
+    const current = this.client.userList?.get(id) || matching(this.client.userList) || {};
+    const cached = this.users.get(id) || matching(this.users) || {};
     const flag = data.userFlag || cached.flag || current.flag;
     const info = userInfo(this.client, flag);
     const tier = data.tier ?? info.tier;
-    const month = Number(data.subMonth ?? data.fw ?? data.month ?? fw) || 0;
-    const total = Number(data.accMonth ?? data.afw ?? afw ?? month) || 0;
+    const { fw, afw } = tier ? this.months(id) : {};
+    const month = [data.subMonth, data.fw, data.month, fw]
+      .map(Number).find(value => Number.isFinite(value) && value > 0) || 0;
+    const total = [data.accMonth, data.afw, afw, month]
+      .map(Number).find(value => Number.isFinite(value) && value > 0) || 0;
 
     let name = String(
       data.userNick || data.fromNick || current.name || cached.name || id
@@ -449,6 +528,29 @@ export class Chat {
     };
   }
 
+  extend(data) {
+    const user = this.user({ userId: data.id, ...data });
+    this.users.set(user.id, { ...data, fw: user.month, afw: user.total });
+    this.broadcast('user', user);
+  }
+
+  months(id) {
+    const values = [this.client.userList?.get(id), this.users.get(id)].filter(Boolean);
+    const positive = key => values.map(user => Number(user[key]))
+      .find(value => Number.isFinite(value) && value > 0);
+    if (positive('fw') && positive('afw')) return { fw: positive('fw'), afw: positive('afw') };
+    const station = id.replace(/\(\d+\)$/, '');
+    for (const list of [this.client.userList, this.users]) {
+      for (const [key, user] of list || []) {
+        if (key !== id && key.replace(/\(\d+\)$/, '') === station) values.push(user);
+      }
+    }
+    return {
+      fw: positive('fw'),
+      afw: positive('afw')
+    };
+  }
+
   add(type, data = {}) {
     if (this.closed || data.test || !this.client.bjId) {
       return;
@@ -456,12 +558,15 @@ export class Chat {
 
     const entry = {
       id: crypto.randomUUID(),
+      account: this.client.info?.IS_LOGIN === 1 ? this.client.info.LOGIN_ID || '' : '',
       date: new Date().toISOString(),
       type,
       user: this.user(data),
       message: String(data.message || ''),
       image: data.imageUrl || '',
       ogq: data.ogqId || '',
+      stickers: type === 'content' ? data.stickers : undefined,
+      images: type === 'content' ? data.images : undefined,
       emoticons: this.client.findEmoticon?.(data.message || '') || []
     };
 
@@ -471,6 +576,17 @@ export class Chat {
 
     if (data.tone) {
       entry.tone = data.tone;
+    }
+
+    entry.activity = type === 'macro' ? data.activity : undefined;
+    entry.category = data.category || this.category(entry);
+
+    if (type === 'whisper') {
+      entry.direction = data.direction;
+    }
+
+    if (type === 'gift' && Number.isSafeInteger(data.fanOrder) && data.fanOrder > 0) {
+      entry.fanOrder = data.fanOrder;
     }
 
     if (entry.user.id && entry.user.tier && entry.user.month > 0) {
@@ -485,7 +601,7 @@ export class Chat {
     const file = path.join(folder, this.filename());
 
     try {
-      fs.mkdirSync(folder, { recursive: true });
+      fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.appendFileSync(file, JSON.stringify(entry) + '\n', { mode: 0o600 });
     } catch (error) {
       if (type !== 'error') {
@@ -493,7 +609,9 @@ export class Chat {
       }
     }
 
-    this.broadcast('chat', entry);
+    if (!['macro', 'content'].includes(type)) {
+      this.broadcast('chat', entry);
+    }
 
     return entry;
   }
@@ -517,7 +635,10 @@ export class Chat {
     const user = this.user(data);
     const channel = this.client.bjId;
 
-    this.kicked.set(data.userId, data);
+    this.kicked.set(data.userId, {
+      ...data,
+      date: data.date || `${time.getDate()} ${time.getTime()}`
+    });
     this.broadcast('state', this.state());
     this.broadcast('user', { ...user, kicked: true });
 
@@ -547,13 +668,81 @@ export class Chat {
     this.add('system', { ...data, role: user.role, message });
   }
 
-  system(message) {
-    return this.add('system', { message });
+  category(entry) {
+    if (entry.type === 'macro') {
+      return 'macro';
+    }
+
+    if (entry.type === 'gift') {
+      if (String(entry.message || '').includes('도전미션')) {
+        return 'challenge';
+      }
+
+      if (String(entry.message || '').includes('대결미션')) {
+        return 'battle';
+      }
+      return 'support';
+    }
+
+    if (entry.type === 'system') {
+      if (/^님이 대화방(?:에 참여했습니다|에서 나가셨습니다)\./.test(entry.message)) {
+        return 'presence';
+      }
+
+      if (/^현재 투표가 /.test(entry.message)) {
+        return 'poll';
+      }
+
+      if (/변경/.test(`${entry.heading || ''} ${entry.message || ''}`)) {
+        return 'change';
+      }
+    }
+
+    return entry.type;
+  }
+
+  system(message, category) {
+    return this.add('system', { message, category });
   }
 
   gift(event, data) {
     if (!data || data.test) {
       return;
+    }
+
+    if (event === 'missionSettle') {
+      const total = (data.list || []).reduce((sum, item) => sum + Number(item[2] || 0), 0);
+      const settlement = this.settlement;
+
+      this.settlement = null;
+      if (settlement && settlement.count === total && Date.now() - settlement.time < 5000) {
+        return;
+      }
+
+      let fanOrder = Number(data.fanOrder) || 0;
+      for (const [userId, userNick, count, fanClub] of data.list || []) {
+        if (!(Number(count) > 0)) continue;
+        this.add('gift', {
+          userId,
+          userNick,
+          message: `미션 정산 ${count}개`,
+          fanOrder: Number(fanClub) === 1 && fanOrder > 0 ? fanOrder++ : 0
+        });
+      }
+      return;
+    }
+
+    if (event === 'challenge' || event === 'battle') {
+      const gift = event === 'challenge' ? 'CHALLENGE_GIFT' : 'GIFT';
+      const settle = event === 'challenge' ? 'CHALLENGE_SETTLE' : 'SETTLE';
+
+      if (![gift, settle].includes(data.type)) return;
+      const count = Number(data.type === settle ? data.settle_count : data.gift_count);
+      if (!(count > 0)) return;
+      data = { ...data, count };
+      if (data.type === settle) {
+        this.settlement = { count, time: Date.now() };
+      }
     }
 
     const name = data.userNick || data.user_nick || data.fromNick || '';
@@ -576,17 +765,10 @@ export class Chat {
     else if (event === 'challenge' || event === 'battle') {
       message = `[${data.title || gifts[event]}] ${gifts[event]} ${count}개`;
     }
-    else if (event === 'missionSettle') {
-      const total = (data.list || []).reduce(
-        (sum, item) => sum + Number(item[2] || 0),
-        0
-      );
-
-      message = `미션 정산 ${total}개`;
-    }
 
     this.add('gift', {
       ...data,
+      category: ['challenge', 'battle'].includes(event) ? event : 'support',
       userId: data.userId || data.user_id,
       userNick: name,
       message
@@ -595,10 +777,7 @@ export class Chat {
 
   subscription(entry) {
     const user = entry.user;
-    const current = this.client.userList?.get(user?.id);
-    const cached = this.users.get(user?.id);
-    const month = current?.fw > 0 ? current.fw : cached?.fw;
-    const total = current?.afw > 0 ? current.afw : cached?.afw;
+    const { fw: month, afw: total } = user?.id ? this.months(user.id) : {};
 
     if (!user?.tier || user.month > 0 || !month) {
       return;
@@ -612,11 +791,63 @@ export class Chat {
   filename() {
     const id = encodeURIComponent(this.client.bjId);
 
-    return `chat-${id}.log`;
+    return path.join('chat', `${id}.log`);
+  }
+
+  restore() {
+    const id = this.client.bjId;
+    if (!id || this.restored === id || !/^[a-zA-Z0-9_]{1,50}$/.test(id)) return;
+    const folder = path.resolve('notifications', id, 'inbox');
+    if (!fs.existsSync(folder)) return;
+    const dates = fs.existsSync(this.directory)
+      ? fs.readdirSync(this.directory).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)) : [];
+    let since = Infinity;
+    const known = new Set();
+    for (const date of dates) {
+      const file = path.join(this.directory, date, this.filename());
+      if (!fs.existsSync(file)) continue;
+      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        try {
+          const entry = JSON.parse(line);
+          known.add(entry.id);
+          if (entry.type === 'content' && !entry.id.startsWith('inbox:')) {
+            const stamp = Date.parse(entry.date);
+            if (Number.isFinite(stamp)) since = Math.min(since, stamp);
+          }
+        } catch {}
+      }
+    }
+    for (const name of fs.readdirSync(folder).filter(name => name.endsWith('.json'))) {
+      let items;
+      try { items = JSON.parse(fs.readFileSync(path.join(folder, name), 'utf8')); } catch { continue; }
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        const category = { 게시글: 'post', 클립: 'clip', 캐치: 'catch' }[String(item.label || '').split(' ')[0]];
+        if (item.kind !== '콘텐츠' || !category || !item.id || known.has(`inbox:${item.id}`)
+          || !Number.isFinite(item.time) || item.time >= since) continue;
+        const date = new Date(item.time);
+        const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const file = path.join(this.directory, day, this.filename());
+        const entry = { id: `inbox:${item.id}`, date: date.toISOString(), type: 'content', category,
+          account: name === '비로그인.json' ? '' : decodeURIComponent(name.slice(0, -5)),
+          user: item.user || { id: item.userId, name: item.nickname },
+          message: [`[${item.label}] ${item.message || ''}`, item.url].filter(Boolean).join('\n'),
+          stickers: item.stickers || (item.sticker ? [item.sticker] : []), images: item.images };
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.appendFileSync(file, JSON.stringify(entry) + '\n', { mode: 0o600 });
+        known.add(entry.id);
+      }
+    }
+    this.restored = id;
   }
 
   search(options = {}) {
-    const types = ['all', 'chat', 'manager', 'system', 'gift', 'mute', 'kick'];
+    this.restore();
+    const types = [
+      'all', 'chat', 'manager', 'system', 'support', 'mute', 'kick', 'whisper',
+      'notice', 'subtitle', 'error', 'poll', 'presence', 'challenge', 'battle',
+      'macro', 'change', 'post', 'clip', 'catch'
+    ];
     const type = options.type || 'all';
     const text = String(options.text || '')
       .trim()
@@ -646,27 +877,37 @@ export class Chat {
       throw new Error('채팅 종류 오류');
     }
 
-    if (type === 'manager' && !this.state().manager) {
+    const state = this.state();
+    if (type === 'manager' && !state.manager && !state.managerHistory) {
       throw new Error('매니저 권한 필요');
     }
 
-    const manager = Boolean(search) || this.state().manager;
+    const manager = this.state().manager;
     const files = [];
 
     if (!['mute', 'kick'].includes(search?.type)) {
       files.push(this.filename());
     }
 
-    if (manager && (search?.type === 'all' || search?.type === 'mute')) {
+    if (search?.type === 'all' || search?.type === 'mute') {
       files.push('mute.log');
     }
 
-    if (manager && (search?.type === 'all' || search?.type === 'kick')) {
+    if (search?.type === 'all' || search?.type === 'kick') {
       files.push('kick.log');
     }
 
     const normalize = (entry, file, date, offset) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
       if (file === this.filename()) {
+        if (entry.type === 'macro' || entry.type === 'gift' && (!entry.category || entry.category === 'gift')) {
+          entry.category = this.category(entry);
+        }
+        entry.category ||= this.category(entry);
+
         return entry;
       }
 
@@ -693,21 +934,35 @@ export class Chat {
         return false;
       }
 
+      const account = this.client.info?.IS_LOGIN === 1 ? this.client.info.LOGIN_ID || '' : '';
+      if (!search && Object.hasOwn(entry, 'account') && entry.account !== account) {
+        return false;
+      }
+
+      if (!search && ['macro', 'content'].includes(entry.type)) {
+        return false;
+      }
+
       const privateChat = entry.type === 'manager';
       const selected = type === 'manager' ? privateChat : !privateChat;
 
       if (search) {
-        if (privateChat && !manager) {
+        if (privateChat && !manager && !(state.managerHistory && entry.account === this.client.info?.LOGIN_ID)) {
           return false;
         }
 
         const types = {
-          chat: ['chat', 'ogq'],
+          chat: ['chat', 'ogq', 'whisper'],
           system: ['system', 'subtitle', 'notice', 'error']
         };
         const selected = types[search.type] || [search.type];
 
-        if (search.type !== 'all' && !selected.includes(entry.type)) {
+        if (search.type === 'support' && entry.category !== 'support') return false;
+
+        if (
+          search.type !== 'all' && !selected.includes(entry.type)
+          && search.type !== entry.category
+        ) {
           return false;
         }
 
@@ -1014,6 +1269,59 @@ export class Chat {
       throw new Error('방송 연결 없음');
     }
 
+    if (data.action === 'receive') {
+      if (typeof data.enabled !== 'boolean') {
+        throw new Error('귓속말 수신 설정 오류');
+      }
+
+      const flag = checkFlag(this.flag || this.client.userFlag);
+
+      if (flag.isBlock === !data.enabled) {
+        return;
+      }
+
+      const flag1 = data.enabled
+        ? flag.flag1 & ~USER_FLAG1.BLOCK
+        : flag.flag1 | USER_FLAG1.BLOCK;
+
+      return new Promise((resolve, reject) => {
+        const finish = error => {
+          clearTimeout(timer);
+          this.client.off('userFlag', receive);
+          this.client.off('close', cancel);
+          this.client.off('join', cancel);
+          this.requests.delete(cancel);
+
+          if (error) {
+            reject(error);
+          }
+          else {
+            resolve();
+          }
+        };
+        const receive = result => {
+          if (result.userId === this.client.userId && result.flag?.isBlock === !data.enabled) {
+            finish();
+          }
+        };
+        const cancel = () => finish(new Error('방송 연결 변경 됨'));
+        const timer = setTimeout(() => finish(new Error('귓속말 수신 설정 실패')), 5000);
+
+        this.requests.add(cancel);
+        this.client.on('userFlag', receive);
+        this.client.on('close', cancel);
+        this.client.on('join', cancel);
+
+        try {
+          if (!this.client.sendUserFlag(`${flag1 >>> 0}|${flag.flag2}`)) {
+            finish(new Error('귓속말 수신 설정 실패'));
+          }
+        } catch (error) {
+          finish(error);
+        }
+      });
+    }
+
     if (data.action === 'translate') {
       const message = String(data.message || '').trim();
 
@@ -1291,6 +1599,9 @@ export class Chat {
   }
 
   close() {
+    if (this.owner && this.viewingHandler) {
+      this.owner.off('viewing', this.viewingHandler);
+    }
     this.closed = true;
 
     for (const cancel of this.requests) {
@@ -1299,6 +1610,7 @@ export class Chat {
 
     for (const [event, handler] of this.events) {
       this.client.off(event, handler);
+      if (this.owner !== this.client) this.owner?.off(event, handler);
     }
 
     for (const page of this.pages) {

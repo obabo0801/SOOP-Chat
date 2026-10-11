@@ -6,8 +6,11 @@
 
     "weflab": "WEFLAB",
     "editor": true,
+    "accessPw": "ACCESSPW",
+    "screenPw": "",
     "host": "HOST",
     "port": "PORT",
+    "count": 10,
     "origins": "ORIGINS",
 
     "isLink": true,

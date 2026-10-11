@@ -1,5 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { AsyncLocalStorage } from 'async_hooks';
+import { settingsFile } from './settings.js';
+import { useEnabled } from './editor/usage.js';
 import { SoopHistory } from '#soop/history';
 import { checkFlag } from '#soop/handler';
 import * as control from '#soop/control';
@@ -25,11 +28,19 @@ const EVENTS = {
 };
 
 export class SoopMacro {
+  get enabled() {
+    return useEnabled(this.client, this.file, this.config.enabled);
+  }
   constructor(client, options = {}) {
     this.client = client;
     this.options = options;
-    this.file =
-      options.file === false ? null : path.resolve(options.file || 'macros.json');
+    this.file = null;
+
+    if (options.file !== false && client.bjId) {
+      this.file = settingsFile('macros', client.bjId, true, options.file);
+    }
+    this.context = new AsyncLocalStorage();
+    this.generation = 0;
 
     this.config = {
       enabled: false,
@@ -46,6 +57,18 @@ export class SoopMacro {
     this.challenge = '';
     this.battle = '';
     this.settlement = null;
+    this.watcher = () => {
+      if (this.closed) {
+        return;
+      }
+
+      try {
+        this.load();
+        this.client.emit('macro', { type: 'load', message: '수정 완료' });
+      } catch (error) {
+        this.client.emit('error', error);
+      }
+    };
 
     if (this.file) {
       if (!fs.existsSync(this.file)) {
@@ -79,22 +102,6 @@ export class SoopMacro {
 
       this.load();
 
-      this.watcher = () => {
-        if (this.closed) {
-          return;
-        }
-
-        try {
-          this.load();
-          this.client.emit('macro', {
-            type: 'load',
-            message: '수정 완료'
-          });
-        } catch (error) {
-          this.client.emit('error', error);
-        }
-      };
-
       fs.watchFile(this.file, { interval: 1000 }, this.watcher);
     }
     else {
@@ -110,6 +117,8 @@ export class SoopMacro {
         ...(options.history || {})
       });
     }
+
+    this.on('channel', () => this.select());
 
     this.on('chat', data => {
       return this.handle(data);
@@ -128,6 +137,12 @@ export class SoopMacro {
       this.challenge = '';
       this.battle = '';
       this.settlement = null;
+
+      for (const rule of this.rules) {
+        if (rule.kind === 'interval') {
+          this.cooldowns.delete(rule.id);
+        }
+      }
     });
 
     for (const event of ['subBj', 'userFlag']) {
@@ -140,7 +155,7 @@ export class SoopMacro {
 
     this.on('chuser', data => {
       if (data.type === 1) {
-        this.handleEvent('enter', {
+        return this.handleEvent('enter', {
           ...data.user,
           userId: data.user.id,
           userNick: data.user.name
@@ -156,8 +171,37 @@ export class SoopMacro {
   }
 
   on(event, handler) {
-    this.events.set(event, handler);
-    this.client.on(event, handler);
+    const listener = (...args) => this.context.run(
+      event === 'channel' ? undefined : this.generation, () => handler(...args)
+    );
+
+    this.events.set(event, listener);
+    this.client.on(event, listener);
+  }
+
+  select() {
+    this.generation++;
+    this.allowed = null;
+    this.challenge = '';
+    this.battle = '';
+    this.settlement = null;
+    this.update({ enabled: false, rules: [] });
+
+    if (this.options.file === false || !this.client.bjId) {
+      return;
+    }
+
+    if (this.file) {
+      fs.unwatchFile(this.file, this.watcher);
+    }
+    this.file = settingsFile('macros', this.client.bjId, !this.file, this.options.file);
+
+    if (!fs.existsSync(this.file)) {
+      fs.writeFileSync(this.file, JSON.stringify(this.config, null, 4) + '\n');
+    }
+
+    this.load();
+    fs.watchFile(this.file, { interval: 1000 }, this.watcher);
   }
 
   load() {
@@ -401,13 +445,14 @@ export class SoopMacro {
     }
 
     if (write && this.file) {
+      useEnabled(this.client, this.file, false, config.enabled);
       const temporary = this.file + '.tmp';
 
-      fs.writeFileSync(temporary, JSON.stringify(config, null, 4) + '\n');
+      fs.writeFileSync(temporary, JSON.stringify({ ...config, enabled: false }, null, 4) + '\n');
       fs.renameSync(temporary, this.file);
     }
 
-    this.config = config;
+    this.config = { ...config, enabled: useEnabled(this.client, this.file, config.enabled) };
     this.rules = rules;
     this.cooldowns.clear();
 
@@ -422,8 +467,12 @@ export class SoopMacro {
     if (rules.some(rule => rule.kind === 'interval' && this.isEnabled(rule))) {
       this.timer = setInterval(() => {
         for (const rule of this.rules) {
-          if (rule.kind === 'interval' && this.isEnabled(rule)) {
-            this.enqueue(rule, { source: 'event' }, {}, rule.interval);
+          try {
+            if (rule.kind === 'interval' && this.isEnabled(rule)) {
+              this.enqueue(rule, { source: 'event' }, {}, rule.interval);
+            }
+          } catch (error) {
+            this.client.emit('error', error);
           }
         }
       }, 1000);
@@ -435,11 +484,28 @@ export class SoopMacro {
       throw new Error('매크로 설정 오류');
     }
 
-    this.save({ ...this.config, enabled });
+    if (!this.file) {
+      this.update({ ...this.config, enabled });
+      return;
+    }
+    useEnabled(this.client, this.file, false, enabled);
+    this.update({ ...this.config, enabled });
   }
 
-  save(config) {
+  save(config, data = {}) {
+    const changed = JSON.stringify(this.config) !== JSON.stringify(config);
+
     this.update(config, true);
+
+    if (changed) {
+      this.client.emit('macro', {
+        userId: this.client.userId || this.client.info?.LOGIN_ID,
+        userNick: this.client.info?.LOGIN_NICK,
+        ...data,
+        type: 'edit',
+        message: data.message || '매크로 설정이 변경되었습니다.'
+      });
+    }
   }
 
   isEnabled(rule) {
@@ -527,7 +593,8 @@ export class SoopMacro {
 
     const result =
       !this.closed
-      && this.config.enabled
+      && (this.context.getStore() === undefined || this.context.getStore() === this.generation)
+      && this.enabled
       && !this.client.idle
       && this.client.isOpen()
       && Number(this.client.info?.IS_LOGIN) === 1
@@ -579,6 +646,10 @@ export class SoopMacro {
   }
 
   async replyManager(message) {
+    if (!this.canSend()) {
+      return;
+    }
+
     try {
       if (!(await this.client.sendManagerChat(message))) {
         throw new Error('매니저 채팅 전송 실패');
@@ -693,6 +764,11 @@ export class SoopMacro {
 
               return rule;
             })
+          }, {
+            userId: data.userId,
+            userNick: data.userNick,
+            rule: this.config.rules[index].name || command,
+            message: `[${command}] 답변이 수정되었습니다.\n${args.replace(/\\r\\n|\\n/g, '\n')}`
           });
 
           const status = args ? '수정 완료' : '삭제 완료';
@@ -921,6 +997,12 @@ export class SoopMacro {
 
     const last = this.cooldowns.get(key);
 
+    if (rule.kind === 'interval' && last === undefined) {
+      this.cooldowns.set(key, now);
+
+      return Promise.resolve(false);
+    }
+
     if (last !== undefined && now - last < cooldown * 1000) {
       return Promise.resolve(false);
     }
@@ -932,14 +1014,16 @@ export class SoopMacro {
       this.cooldowns.delete(this.cooldowns.keys().next().value);
     }
 
+    const generation = this.generation;
+
     this.queue = this.queue
-      .then(async () => {
+      .then(() => this.context.run(generation, async () => {
         if (!this.canSend() || !this.rules.includes(rule)) {
           return false;
         }
 
         return this.run(rule, data, match);
-      })
+      }))
       .catch(error => {
         this.client.emit('error', error);
 
@@ -970,16 +1054,24 @@ export class SoopMacro {
 
           const count = Number(args);
 
-          const result = await control.startMulti(count);
+          const result = await control.startMulti(count, this.client);
           const status = result.updated ? '수정 완료' : '실행 완료';
 
           message = `/개번쩍/ [${command}] ${status}\n${count}개`;
         }
-        else if ((await control.multiStatus()).running) {
-          await control.stopMulti();
+        else if ((await control.multiStatus(this.client)).running) {
+          await control.stopMulti(this.client);
         }
 
         await this.replyManager(message);
+
+        this.client.emit('macro', {
+          type: 'send',
+          rule: rule.name || rule.id,
+          message,
+          userId: data.userId || '',
+          userNick: data.userNick || ''
+        });
 
         return true;
       } catch (error) {
@@ -1174,8 +1266,12 @@ export class SoopMacro {
       }
 
       const command = data.message.split(/\s+/)[0];
+      const content = String(match.args || '').trim();
+      const notification = content
+        ? `${variables.이름 || variables.아이디}님이 "${content}" 메시지로 호출하였습니다.`
+        : message;
       const result = Boolean(
-        await this.client.notify?.call(message, rule.cooldown, rule.name)
+        await this.client.notify?.call(notification, rule.cooldown, rule.name)
       );
       let response = `[${command}] 알림 전송 실패`;
 
@@ -1184,6 +1280,16 @@ export class SoopMacro {
       }
 
       await this.replyManager(response);
+
+      if (result) {
+        this.client.emit('macro', {
+          type: 'send',
+          rule: rule.name || rule.id,
+          message: notification,
+          userId: data.userId || '',
+          userNick: data.userNick || ''
+        });
+      }
 
       return result;
     }
@@ -1276,5 +1382,8 @@ export class SoopMacro {
     this.events.clear();
     this.history?.close();
     await this.queue;
+    if ((await control.multiStatus(this.client)).running) {
+      await control.stopMulti(this.client);
+    }
   }
 }

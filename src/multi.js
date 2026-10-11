@@ -5,6 +5,7 @@ import * as tenants from '#soop/tenants';
 import * as control from '#soop/control';
 import * as log from '#utils/log';
 import { parseEnv } from '#utils/env';
+import { stopRecovery } from './soop/editor/runtime.js';
 config({ quiet: true });
 
 parseEnv(undefined, false);
@@ -21,6 +22,7 @@ function shutdown() {
   }
 
   stopping = true;
+  stopRecovery();
 
   stopTask = manager
     .destroy()
@@ -56,12 +58,14 @@ async function start() {
       throw new Error('연결 개수 오류');
     }
 
-    const definitions = tenants.loadTenants();
-    const options = tenants.tenantOptions(definitions, process.argv[2]);
+    const scoped = Boolean(process.env.MULTISCOPE);
+    const definitions = scoped ? undefined : tenants.loadTenants();
+    const options = tenants.tenantOptions(definitions, process.argv[2], scoped
+      ? { ...process.env, BJID: process.env.MULTIBJID, BROADPW: process.env.MULTIPW } : process.env);
 
     server = await control.listenControl(shutdown, status);
 
-    tenants.createTenants(process.argv[2]);
+    if (!scoped) tenants.createTenants(process.argv[2]);
 
     for (const option of options) {
       manager.add(option.id, option);

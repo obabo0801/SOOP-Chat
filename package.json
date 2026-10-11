@@ -1,6 +1,6 @@
 {
   "name": "soop-chat",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "license": "MIT",
   "author": "unjongjjing",
   "type": "module",
@@ -10,8 +10,8 @@
     "./soop/*": "./src/soop/*.js"
   },
   "scripts": {
-    "start": "node src/index.js",
-    "start:multi": "node src/multi.js",
+    "start": "node --no-maglev src/soop/editor/runtime.js index",
+    "start:multi": "node --no-maglev src/soop/editor/runtime.js multi",
     "stop:multi": "node src/multi.js --stop"
   },
   "imports": {
@@ -28,6 +28,7 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "hls.js": "^1.7.3",
+    "web-push": "^3.6.7",
     "ws": "^8.21.0"
   }
 }

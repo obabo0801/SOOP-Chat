@@ -4,14 +4,18 @@ import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { loadTenants, tenantOptions } from '#soop/tenants';
+import * as tenants from '#soop/tenants';
 
 const connections = new WeakMap();
-let starting = null;
+const starting = new Set();
 
-export async function multiStatus() {
+function scope(client) {
+  return client ? String(client.multiScope || process.pid) : process.env.MULTISCOPE || '';
+}
+
+export async function multiStatus(client) {
   try {
-    const rows = await requestMulti('status');
+    const rows = await requestMulti('status', '전체', client);
 
     return { running: true, rows };
   } catch (error) {
@@ -23,29 +27,35 @@ export async function multiStatus() {
   }
 }
 
-export async function startMulti(count) {
+export async function startMulti(count, client) {
   if (!Number.isSafeInteger(count) || count < 1) {
     throw new Error('연결 개수 오류');
   }
 
-  if (starting) {
+  const key = scope(client);
+  if (starting.has(key)) {
     throw new Error('실행 준비 중');
   }
 
-  starting = (async () => {
-    const current = await multiStatus();
+  starting.add(key);
+  const task = (async () => {
+    const current = await multiStatus(client);
 
-    tenantOptions(loadTenants(), count);
+    const env = client ? { ...process.env, MULTISCOPE: key, MULTIBJID: client.bjId,
+      MULTIPW: client.broadPw || '' } : process.env;
+    tenants.tenantOptions(client ? undefined : tenants.loadTenants(), count,
+      client ? { ...env, BJID: client.bjId, BROADPW: client.broadPw || '' } : env);
 
     if (current.running) {
-      await stopMulti();
+      await stopMulti(client);
     }
 
     const child = spawn(
       process.execPath,
-      [fileURLToPath(new URL('../multi.js', import.meta.url)), String(count)],
+      ['--no-maglev', fileURLToPath(new URL('./editor/runtime.js', import.meta.url)), 'multi', String(count)],
       {
         cwd: process.cwd(),
+        env,
         windowsHide: true,
         stdio: ['pipe', 'ignore', 'ignore']
       }
@@ -69,7 +79,7 @@ export async function startMulti(count) {
           throw new Error('멀티 실행 실패');
         }
 
-        const result = await multiStatus();
+        const result = await multiStatus(client);
 
         if (result.running) {
           return { ...result, updated: current.running };
@@ -85,16 +95,17 @@ export async function startMulti(count) {
   })();
 
   try {
-    return await starting;
+    return await task;
   } finally {
-    starting = null;
+    starting.delete(key);
   }
 }
 
-export function controlPath() {
+export function controlPath(client) {
   const root = process.platform === 'win32' ? process.cwd().toLowerCase() : process.cwd();
 
-  const key = crypto.createHash('sha256').update(root).digest('hex').slice(0, 16);
+  const group = scope(client);
+  const key = crypto.createHash('sha256').update(group ? `${root}:${group}` : root).digest('hex').slice(0, 16);
 
   let result;
 
@@ -185,9 +196,9 @@ export function closeControl(server) {
   }
 }
 
-export async function requestMulti(action, target = '전체') {
+export async function requestMulti(action, target = '전체', client) {
   const value = new Promise((resolve, reject) => {
-    const socket = net.createConnection(controlPath());
+    const socket = net.createConnection(controlPath(client));
 
     socket.setEncoding('utf8');
     socket.setTimeout(15000, () => {
@@ -239,9 +250,9 @@ export async function requestMulti(action, target = '전체') {
   return value;
 }
 
-export async function stopMulti() {
+export async function stopMulti(client) {
   const value = new Promise((resolve, reject) => {
-    const socket = net.createConnection(controlPath());
+    const socket = net.createConnection(controlPath(client));
 
     socket.setEncoding('utf8');
     socket.setTimeout(20000, () => {

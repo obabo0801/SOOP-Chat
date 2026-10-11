@@ -32,10 +32,6 @@ export function dispatch(soop, pkt) {
 
       soop.userFlag = fields[6];
 
-      if (soop.info?.IS_LOGIN === 1) {
-        soop.sendUserFlag(soop.userFlag);
-      }
-
       soop.emit('join', {
         userId: soop.channel?.USERID,
         userNick: soop.channel?.UNICK,
@@ -362,7 +358,8 @@ export function dispatch(soop, pkt) {
         toId: fields[3],
         toNick: fields[4],
         itemType,
-        item: QUICKVIEW_TYPE[itemType]
+        item: QUICKVIEW_TYPE[itemType],
+        imageUrl: new URL('/ceremony/quickview.png', DOMAIN.res).href
       });
       break;
     }
@@ -616,7 +613,8 @@ export function dispatch(soop, pkt) {
           toNick: fields[4],
           bjId: fields[5],
           bjNick: fields[6],
-          itemType
+          itemType,
+          imageUrl: new URL('/ceremony/basic_subscription.png', DOMAIN.res).href
         });
         break;
       }
@@ -631,7 +629,8 @@ export function dispatch(soop, pkt) {
         itemType,
         item,
         tier: item.tier,
-        tierName: tierName(soop, item.tier)
+        tierName: tierName(soop, item.tier),
+        imageUrl: new URL('/ceremony/basic_subscription.png', DOMAIN.res).href
       });
       break;
     }
@@ -755,17 +754,14 @@ export function dispatch(soop, pkt) {
     }
 
     case SVC.CHUSER_EXTEND: {
-      const userId = fields[0];
-      const user = soop.userList.get(userId);
-
-      if (!user) {
-        break;
+      for (let index = 0; index + 1 < fields.length; index += 2) {
+        const userId = fields[index];
+        if (!userId) continue;
+        const current = soop.userList.get(userId);
+        const user = { ...current, id: userId, ...parseMonth(fields[index + 1]) };
+        if (current) soop.userList.set(userId, user);
+        soop.emit('userExtend', user);
       }
-
-      Object.assign(user, parseMonth(fields[1]));
-
-      soop.userList.set(userId, user);
-      soop.emit('userExtend', { ...user });
       break;
     }
 
@@ -948,6 +944,7 @@ export function userList(soop, fields = []) {
       }
 
       const user = {
+        ...soop.userList.get(id),
         id,
         name: fields[i + 1],
         flag: fields[i + 2],
@@ -988,9 +985,13 @@ export function userList(soop, fields = []) {
 }
 
 export function kickList(soop, fields = []) {
+  if (fields.some(Boolean) && fields.length < 6) {
+    return null;
+  }
+
   const kicks = [];
 
-  for (let i = 0; i < fields.length; i += 6) {
+  for (let i = 0; i + 5 < fields.length; i += 6) {
     const userId = fields[i];
 
     if (!userId) {

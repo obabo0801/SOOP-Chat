@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="220" viewBox="0 0 560 220">
+  <rect width="560" height="220" rx="20" fill="#f2f6f4" />
+  <g fill="#fff" stroke="#e2ebe5">
+    <rect x="20" y="28" width="140" height="166" rx="16" />
+    <rect x="210" y="28" width="140" height="166" rx="16" />
+    <rect x="400" y="28" width="140" height="166" rx="16" />
+  </g>
+  <g fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#929b96">
+      <rect x="62" y="59" width="56" height="42" rx="6" />
+      <path d="M78 111h24M90 101v10M82 72l16 16m0-16L82 88" />
+      <path d="M172 106h26m-8-8 8 8-8 8" />
+    </g>
+    <g stroke="#4a8ec5">
+      <circle cx="280" cy="84" r="27" stroke-dasharray="4 7" />
+      <path d="M280 67v18l11 7" />
+    </g>
+    <g stroke="#62a580">
+      <path d="M362 106h26m-8-8 8 8-8 8" />
+      <rect x="442" y="59" width="56" height="42" rx="6" />
+      <path d="M458 111h24M470 101v10" />
+      <path d="m464 70 15 10-15 10z" fill="#62a580" stroke="none" />
+    </g>
+  </g>
+  <g font-family="Malgun Gothic, sans-serif" text-anchor="middle">
+    <g font-size="16" font-weight="700" fill="#33493d">
+      <text x="90" y="149">방송 종료</text>
+      <text x="280" y="149">연결 대기</text>
+      <text x="470" y="149">자동 접속</text>
+    </g>
+    <g font-size="13" fill="#76897f">
+      <text x="280" y="175">연결 유지</text>
+      <text x="470" y="175">방송 재시작</text>
+    </g>
+  </g>
+</svg>

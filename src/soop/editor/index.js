@@ -1,8 +1,40 @@
 import Hls from '/hls.js';
+import { createLivePreview } from '/preview.js';
 import { DOMAIN } from '/config.js';
 import { createChat, createPreview } from '/chat.js';
+import { createTheme } from '/theme.js';
+import { createSearch } from '/search.js';
+import { createPip } from '/pip.js';
+import { createQuick } from '/quick.js';
+import { createHome } from '/home.js';
+import { createConnect } from '/connect.js';
+import { createPopups } from '/popup.js';
+import { createInbox } from '/inbox.js';
+import * as deviceModule from '/device.js';
+import * as broadcastModule from '/broadcast.js';
 
-const $ = id => document.getElementById(id);
+const videoElements = new Map(
+  ['video', 'video-subtitle'].map(id => [id, document.getElementById(id)])
+);
+const $ = id => document.getElementById(id) || videoElements.get(id);
+const homeView = ['/', '/search', '/search/'].includes(location.pathname);
+$('home-open').href = homeUrl();
+const theme = createTheme($('theme'));
+createPopups();
+const inbox = createInbox(request, user => chat.profile(user));
+const device = deviceModule.createDevice(request, () => player);
+const broadcastAccess = broadcastModule.createBroadcast(request, load);
+
+$('notify-guide-link').href = new URL('/app', DOMAIN.ntfy).href;
+const logo = () => {
+  const name = document.body.classList.contains('dark') ? 'soop_logo_dark.svg' : 'soop_logo.svg';
+  for (const id of ['home-logo', 'access-logo']) {
+    $(id).src = new URL(`/images/svg/${name}`, DOMAIN.res).href;
+  }
+};
+window.addEventListener('theme', logo);
+logo();
+
 const emblems = {
   silver: '실버',
   gold: '골드',
@@ -45,30 +77,121 @@ let revision;
 let selected = -1;
 let dirty = false;
 let busy = false;
+let transitioning = false;
+let generation = 0;
 let packs = [];
 let pack = '';
 let number = 1;
 let emoticons = [];
 let token = location.hash.slice(1);
+const tokenKey = `editor:${location.pathname.replace(/\/search\/?$/, '/')}`;
 
 try {
   if (token) {
-    sessionStorage.setItem('editor', token);
-    history.replaceState(null, '', location.pathname);
+    sessionStorage.setItem(tokenKey, token);
+    history.replaceState(null, '', location.pathname + location.search);
   }
   else {
-    token = sessionStorage.getItem('editor') || '';
+    token = sessionStorage.getItem(tokenKey) || '';
   }
 } catch {
   token = location.hash.slice(1);
 }
 
-function status(message, error = false) {
-  for (const id of ['status', 'macro-status']) {
-    $(id).textContent = message;
-    $(id).classList.toggle('error', error);
-  }
+function macroStatus(message, error = false) {
+  $('macro-status').textContent = message;
+  $('macro-status').classList.toggle('error', error);
 }
+
+async function access() {
+  const gate = await request('GET', undefined, '/' + 'api/gate');
+  if (gate.password) {
+    await unlock('/' + 'api/access', homeView);
+  }
+  const entry = await request('GET', undefined, '/api/entry');
+
+  if (!entry.password) {
+    token = entry.token;
+    try {
+      sessionStorage.setItem(tokenKey, token);
+    } catch {}
+    return;
+  }
+
+  await unlock('/api/access', true, entry.profile || {});
+}
+
+async function unlock(endpoint, remember, profile) {
+  $('access-logo').hidden = Boolean(profile);
+  $('access-streamer').hidden = !profile;
+  $('access-name').textContent = profile?.name || '방송';
+  $('access-avatar').hidden = true;
+  $('access-avatar').removeAttribute('src');
+  if (profile?.image) $('access-avatar').src = profile.image;
+  const label = profile ? '방송 접속 비밀번호' : '접속 비밀번호';
+  $('access-label').textContent = label;
+  $('access-password').placeholder = label;
+  $('access-password').type = 'password';
+  $('access-visible').classList.remove('visible');
+  $('access-visible').title = '비밀번호 표시';
+  $('access-submit').textContent = profile ? '들어가기' : '접속하기';
+  const closeSite = event => {
+    event.preventDefault();
+    if (profile) {
+      window.location.replace(homeUrl());
+      return;
+    }
+    window.close();
+    if (!window.closed) window.location.replace('about:blank');
+  };
+  $('access').addEventListener('cancel', closeSite);
+  $('access-close').addEventListener('click', closeSite);
+  $('access-error').addEventListener('close', () => $('access-password').focus());
+  $('access').showModal();
+
+  await new Promise(resolve => {
+    const submit = async event => {
+      event.preventDefault();
+      $('access-submit').disabled = true;
+
+      try {
+        const data = await request('POST', {
+          password: $('access-password').value
+        }, endpoint);
+
+        if (remember) {
+          token = data.token;
+          try {
+            sessionStorage.setItem(tokenKey, token);
+          } catch {}
+        }
+        $('access-password').value = '';
+        $('access-form').removeEventListener('submit', submit);
+        $('access').close();
+        resolve();
+      } catch (error) {
+        $('access-message').textContent = error.message;
+        $('access-error').showModal();
+      } finally {
+        $('access-submit').disabled = false;
+      }
+    };
+
+    $('access-form').addEventListener('submit', submit);
+  });
+  $('access').removeEventListener('cancel', closeSite);
+  $('access-close').removeEventListener('click', closeSite);
+}
+
+$('access-avatar').addEventListener('load', () => { $('access-avatar').hidden = false; });
+$('access-avatar').addEventListener('error', () => { $('access-avatar').hidden = true; });
+$('access-visible').addEventListener('click', () => {
+  const visible = $('access-password').type === 'password';
+  $('access-password').type = visible ? 'text' : 'password';
+  $('access-visible').classList.toggle('visible', visible);
+  $('access-visible').title = visible ? '비밀번호 숨기기' : '비밀번호 표시';
+  $('access-password').focus();
+});
 
 async function request(method = 'GET', data, endpoint = '/api/config') {
   let response;
@@ -89,16 +212,43 @@ async function request(method = 'GET', data, endpoint = '/api/config') {
   const result = await response.json();
 
   if (!response.ok) {
-    throw new Error(result.error || '설정 요청 실패');
+    const error = new Error(result.error || '설정 요청 실패');
+
+    error.code = response.status;
+
+    throw error;
   }
 
   return result;
 }
 
+for (const action of ['favorite', 'up']) {
+  const button = $(`video-${action}`);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      if (action === 'up' && button.classList.contains('active')) {
+        chat.system('이미 UP했습니다.');
+        return;
+      }
+      const result = await request('POST', { action, active: !button.classList.contains('active') }, '/api/reaction');
+      button.classList.toggle('active', result.active);
+      button.title = action === 'up' ? '이미 UP했습니다.'
+        : result.active ? '즐겨찾기 해제' : '즐겨찾기 추가';
+      await load();
+    } catch (error) {
+      if (error.code === 401) $('account').click();
+      else chat.system(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function changed() {
   dirty = true;
   $('save').disabled = busy;
-  status('');
+  macroStatus('');
 }
 
 function lines(value) {
@@ -137,7 +287,7 @@ function list() {
       selected = index;
       render();
       $('macros').dataset.page = 'edit';
-      $('macros').querySelector('main').scrollTop = 0;
+      $('macros').scrollTop = 0;
     });
     $('list').append(button);
   }
@@ -638,7 +788,7 @@ function render() {
   $('cooldown').value = rule.cooldown ?? 5;
   $('interval').value = rule.interval ?? 300;
   $('output').value = rule.output || 'chat';
-  $('access').value = rule.access || 'all';
+  $('permission').value = rule.access || 'all';
   $('flags').value = rule.flags || '';
   $('edit').checked = rule.edit === true;
   $('commands').checked = rule.commands === true;
@@ -744,7 +894,7 @@ function capture() {
   rule.cooldown = Number($('cooldown').value);
   rule.interval = Number($('interval').value);
   rule.output = $('output').value;
-  rule.access = $('access').value;
+  rule.access = $('permission').value;
   rule.flags = $('flags').value;
   rule.edit = $('edit').checked;
   rule.commands = $('commands').checked;
@@ -835,6 +985,7 @@ function apply(data) {
 let player = '';
 let media = null;
 let attached = '';
+let standby;
 let playback = 0;
 let watching;
 let live = true;
@@ -842,8 +993,59 @@ let notice = '';
 let moving = false;
 let saved;
 let fetching = false;
+let streamController;
 let pending;
 let paused = false;
+let videoEnabled = true;
+
+function enableVideo(enabled) {
+  const changed = videoEnabled !== enabled;
+  videoEnabled = enabled;
+  const button = $('video-toggle');
+  button.classList.toggle('off', !enabled);
+  button.title = enabled ? '영상 끄기' : '영상 켜기';
+  button.querySelector('span').textContent = button.title;
+  $('video-slot').hidden = !enabled;
+  if (!enabled) {
+    saved = undefined;
+    try { sessionStorage.removeItem(`video:${player}`); } catch {}
+  }
+  if (!enabled && changed) {
+    generation++;
+    streamController?.abort();
+    streamController = null;
+    fetching = false;
+    pending = undefined;
+    pip.close();
+    document.body.classList.remove('theater');
+    $('theater').classList.remove('active');
+    $('theater').title = '스크린 모드 (S)';
+    stop();
+    paused = false;
+    live = true;
+    chat.timing({ timing: [], duration: 0, date: null });
+    $('video-save').hidden = true;
+    $('video-save').dataset.url = '';
+    theme.update();
+    followVideo();
+  }
+}
+
+$('video-toggle').addEventListener('click', async () => {
+  const button = $('video-toggle');
+  const enabled = !videoEnabled;
+  button.disabled = true;
+  if (!enabled) enableVideo(false);
+  try {
+    const data = await request('PUT', { enabled }, '/api/stream');
+    enableVideo(data.enabled);
+  } catch (error) {
+    chat.system(error.message, true);
+  } finally {
+    button.disabled = false;
+    void play();
+  }
+});
 
 function position() {
   const video = $('video');
@@ -868,7 +1070,7 @@ function overlay(message = notice) {
   notice = message;
   state.classList.toggle('loading', loading);
   state.textContent = loading ? '' : message;
-  state.hidden = !message || history;
+  state.hidden = !message || history || Boolean(standby);
 }
 
 function remember() {
@@ -882,7 +1084,7 @@ function remember() {
     url: attached,
     time: video.currentTime,
     live,
-    paused: video.paused,
+    paused,
     muted: video.muted,
     quality: $('quality').dataset.value,
     volume: video.volume
@@ -893,12 +1095,18 @@ function remember() {
   } catch {}
 }
 
-function sync() {
+function sync(force = true) {
   const target = position();
   const video = $('video');
 
   if (target !== null && video.readyState && target > video.currentTime) {
-    video.currentTime = target;
+    if (force) video.currentTime = target;
+    for (let index = 0; index < video.buffered.length; index++) {
+      if (video.buffered.start(index) <= target && video.buffered.end(index) > target + 1) {
+        video.currentTime = target;
+        break;
+      }
+    }
   }
 
   live = true;
@@ -913,6 +1121,9 @@ function stop(reset = true) {
   media?.destroy();
   media = null;
   attached = '';
+  standby?.getTracks().forEach(track => track.stop());
+  standby = undefined;
+  $('video').srcObject = null;
   $('video').removeAttribute('src');
   $('video').load();
 
@@ -978,15 +1189,15 @@ function controls() {
     );
 
   for (const id of ['pause', 'rewind', 'live', 'timeline']) {
-    $(id).disabled = !video.readyState;
+    $(id).disabled = !attached || !video.readyState;
   }
 
-  if (!video.paused && !video.seeking && target !== null) {
+  if (!video.paused && !video.seeking && target !== null && !pip.pending()) {
     if (live) {
       const delay = target - video.currentTime;
 
       if (delay > 6) {
-        sync();
+        sync(false);
       }
       else {
         video.playbackRate = delay > 1.5 ? 1.05 : 1;
@@ -1022,7 +1233,7 @@ function attach(data) {
   const video = $('video');
   const restore = saved?.url === data.url && !saved.live;
 
-  paused = saved?.url === data.url && saved.paused;
+  paused = Boolean(saved?.url === data.url && saved.paused);
 
   const start = restore ? Math.min(saved.time, Math.max(0, data.duration - 4)) : -1;
 
@@ -1036,15 +1247,61 @@ function attach(data) {
   if (Hls.isSupported()) {
     media = new Hls({
       startPosition: start,
-      maxBufferLength: 15,
+      maxBufferLength: 30,
       backBufferLength: 120,
       liveDurationInfinity: true,
-      liveSyncDurationCount: 2,
+      initialLiveManifestSize: 3,
+      liveSyncDurationCount: 3,
       liveMaxLatencyDurationCount: Infinity,
       maxLiveSyncPlaybackRate: 1,
-      liveSyncOnStallIncrease: 0
+      liveSyncOnStallIncrease: 1
     });
-    media.on(Hls.Events.ERROR, (event, error) => {
+    const hls = media;
+    hls.on(Hls.Events.BUFFER_APPENDED, () => {
+      if (current !== playback || media !== hls || paused || !live || !video.seeking) return;
+      for (let index = 0; index < video.buffered.length; index++) {
+        const start = video.buffered.start(index);
+        if (start > video.currentTime && start - video.currentTime < 1) {
+          video.currentTime = start + 0.01;
+          break;
+        }
+      }
+    });
+    let retry;
+    let failures = 0;
+    let failed = 0;
+    let slow = 0;
+    let stalls = 0;
+    let stalled = 0;
+    let switching = false;
+    const fallback = () => {
+      if (switching || current !== playback || media !== hls || paused || !live
+        || document.hidden || video.seeking || pip.pending()) return;
+      const resolution = Number.parseInt(data.qualities?.find(item => item.name === data.quality)?.label, 10) || 0;
+      const lower = (data.qualities || []).filter(item => !item.disabled
+        && Number.parseInt(item.label, 10) < resolution)
+        .sort((a, b) => Number.parseInt(b.label, 10) - Number.parseInt(a.label, 10))[0];
+      if (!lower) return;
+      switching = true;
+      remember();
+      void play(lower.name);
+    };
+    hls.on(Hls.Events.FRAG_LOADED, (event, { frag }) => {
+      if (current !== playback || paused || !live || document.hidden || video.seeking) return;
+      const elapsed = (frag.stats.loading.end - frag.stats.loading.start) / 1000;
+      if (!frag.duration || frag.sn === 'initSegment') return;
+      slow = elapsed > frag.duration * 0.9 ? slow + 1 : Math.max(0, slow - 1);
+      if (slow >= 2) fallback();
+    });
+    hls.on(Hls.Events.DESTROYING, () => clearTimeout(retry));
+    hls.on(Hls.Events.ERROR, (event, error) => {
+      if (current === playback && error.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR
+        && !paused && live && !document.hidden && !video.seeking) {
+        const now = Date.now();
+        if (now - stalled > 30000) stalls = 0;
+        stalled = now;
+        if (++stalls >= 2) fallback();
+      }
       if (current === playback && error.fatal) {
         remember();
 
@@ -1053,7 +1310,33 @@ function attach(data) {
           overlay('로딩 중');
         }
         else if (error.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          media.recoverMediaError();
+          if (retry) return;
+          const now = Date.now();
+          if (now - failed > 60000) failures = 0;
+          failed = now;
+          failures++;
+          console.warn('[비디오]', error.details, error.reason || error.error?.message || '');
+          const target = live ? position() ?? -1 : video.currentTime;
+          retry = setTimeout(() => {
+            retry = undefined;
+            if (current !== playback || media !== hls) return;
+            if (failures <= 2) {
+              hls.recoverMediaError();
+              hls.startLoad(target);
+              return;
+            }
+            const resolution = Number.parseInt(data.qualities?.find(item => item.name === data.quality)?.label, 10) || 0;
+            const fallback = (data.qualities || []).filter(item => !item.disabled
+              && Number.parseInt(item.label, 10) < resolution
+              && Number.parseInt(item.label, 10) <= 540)
+              .sort((a, b) => Number.parseInt(b.label, 10) - Number.parseInt(a.label, 10))[0];
+            if (fallback) {
+              void play(fallback.name);
+            } else {
+              hls.stopLoad();
+              overlay('영상 연결에 실패했습니다');
+            }
+          }, 1000);
           overlay('로딩 중');
         }
         else {
@@ -1099,7 +1382,10 @@ async function play(quality) {
   }
 
   const channel = player;
+  const epoch = generation;
+  const controller = new AbortController();
 
+  streamController = controller;
   fetching = true;
 
   try {
@@ -1110,11 +1396,12 @@ async function play(quality) {
     }
 
     const response = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal
     });
     const data = await response.json();
 
-    if (channel !== player) {
+    if (channel !== player || epoch !== generation) {
       return;
     }
 
@@ -1122,7 +1409,11 @@ async function play(quality) {
       throw new Error(data.error || '영상 연결 실패');
     }
 
+    enableVideo(data.enabled !== false);
+    if (!videoEnabled) return;
+
     chat.support(Boolean(data.captions));
+    chat.timing(data);
 
     const available = data.qualities || [];
     const current = [...$('qualities').children].map(item => ({
@@ -1176,15 +1467,41 @@ async function play(quality) {
     overlay(message);
     $('video-save').dataset.url = data.download || '';
     $('video-save').disabled = saving || !data.download;
+    $('video-save').hidden = !data.download;
 
     if (data.url && attached !== data.url) {
       attach(data);
     }
+    else if (data.state === 'offline' && !attached && !standby) {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+
+      canvas.width = 640;
+      canvas.height = 360;
+
+      if (canvas.captureStream && context) {
+        standby = canvas.captureStream(1);
+        context.fillStyle = '#080808';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = '#e4e7ea';
+        context.font = '24px "Malgun Gothic", sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(message || '오프라인', 320, 180);
+        $('video').srcObject = standby;
+        overlay(message);
+        void $('video').play().catch(() => {});
+      }
+    }
   } catch {
-    if (!attached) {
+    if (epoch === generation && !attached) {
       overlay('로딩 중');
     }
   } finally {
+    if (streamController !== controller) {
+      return;
+    }
+
     fetching = false;
 
     if (pending) {
@@ -1283,24 +1600,65 @@ document.addEventListener('click', event => {
     $('subtitle-menu').hidden = true;
   }
 });
-$('pip').disabled = !document.pictureInPictureEnabled;
+$('pip').disabled = !document.pictureInPictureEnabled && !window.documentPictureInPicture
+  && !$('video').webkitSetPresentationMode;
+const pip = createPip($('video'), $('video-subtitle'), () => (
+  $('video-broadcast').textContent || broadcaster?.station?.user_nick || player || '매크로'
+), active => {
+  $('pip').classList.toggle('active', active);
+  $('pip').title = active ? 'PIP 모드 해제' : 'PIP 모드';
+  document.title = player ? active && $('video-broadcast').textContent
+    || broadcaster?.station?.user_nick || player || '매크로' : '\u200b';
+}, () => chat.caption(), () => !paused);
+const followVideo = () => {
+  const slot = $('video-slot');
+  const viewport = window.visualViewport;
+  const top = viewport?.offsetTop || 0;
+  const editing = document.activeElement?.matches('#chat-compose, #chat-manager-input');
+
+  document.body.style.setProperty('--screen-height', `${viewport?.height || window.innerHeight}px`);
+  document.body.style.setProperty('--screen-top', `${top}px`);
+  const following = window.matchMedia('(max-width: 640px), (hover: none) and (pointer: coarse)').matches
+    && !$('screen').hidden && Boolean(attached || standby) && !pip.active()
+    && !document.body.classList.contains('theater')
+    && !document.fullscreenElement && (editing || slot.getBoundingClientRect().top < top);
+  slot.classList.toggle('following', following);
+};
+window.addEventListener('scroll', followVideo, { passive: true, capture: true });
+window.addEventListener('resize', followVideo);
+window.visualViewport?.addEventListener('resize', followVideo);
+window.visualViewport?.addEventListener('scroll', followVideo);
+document.addEventListener('focusin', followVideo);
+document.addEventListener('focusout', () => window.requestAnimationFrame(followVideo));
+document.addEventListener('fullscreenchange', followVideo);
+for (const event of ['enterpictureinpicture', 'leavepictureinpicture', 'loadedmetadata', 'playing', 'emptied']) {
+  $('video').addEventListener(event, followVideo);
+}
 $('pip').addEventListener('click', async () => {
+  $('pip').disabled = true;
+
   try {
-    if (document.pictureInPictureElement) {
-      await document.exitPictureInPicture();
+    if (!pip.active() && standby && !$('video').readyState) {
+      await $('video').play();
     }
-    else {
-      await $('video').requestPictureInPicture();
-    }
+    await pip.toggle();
   } catch {
     chat.system('PIP 실행 실패');
+  } finally {
+    $('pip').disabled = false;
   }
 });
 $('theater').addEventListener('click', () => {
-  document.body.classList.toggle('theater');
+  const active = document.body.classList.toggle('theater');
+
+  $('theater').classList.toggle('active', active);
+  $('theater').title = active ? '스크린 모드 해제 (S)' : '스크린 모드 (S)';
+  theme.update();
+  followVideo();
 });
 
 const thumbnail = document.createElement('video');
+thumbnail.crossOrigin = 'anonymous';
 const canvas = $('timeline-image');
 let thumbnails;
 let source = '';
@@ -1427,9 +1785,11 @@ $('pause').addEventListener('click', () => {
   const video = $('video');
 
   if (video.paused) {
+    paused = false;
     video.play().catch(() => {});
   }
   else {
+    paused = true;
     live = false;
     video.pause();
   }
@@ -1511,7 +1871,7 @@ async function save() {
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
-      status(error instanceof TypeError ? '영상 저장 실패' : error.message, true);
+      macroStatus(error instanceof TypeError ? '영상 저장 실패' : error.message, true);
     }
   } finally {
     saving = false;
@@ -1520,28 +1880,48 @@ async function save() {
 }
 
 $('video-save').addEventListener('click', save);
-$('video-clip').addEventListener('click', () => {
-  const button = $('video-clip');
-  const url = new URL('/vodclip/index.php/', DOMAIN.clip);
-
-  url.search = new URLSearchParams({
-    bj_id: button.dataset.streamer,
-    broad_no: button.dataset.broad,
-    type: 'catch',
-    system: 'html5',
-    second: '0',
-    midroll: '0'
-  });
-  window.open(url.href, 'soop-clip', 'popup,width=900,height=760');
-});
-$('fullscreen').addEventListener('click', () => {
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
+$('fullscreen').addEventListener('click', async () => {
+  if (pip.active()) {
+    try {
+      await pip.exit();
+    } catch {
+      chat.system('PIP 모드를 종료하지 못했습니다.', true);
+      return;
+    }
   }
-  else {
-    $('player')
-      .requestFullscreen()
-      .catch(() => {});
+  pip.guard();
+  if (document.fullscreenElement) {
+    await document.exitFullscreen().catch(() => {});
+  }
+  else if ($('player').requestFullscreen) {
+    try {
+      await document.documentElement.requestFullscreen();
+
+    } catch {
+      if ($('video').webkitEnterFullscreen) {
+        $('video').webkitEnterFullscreen();
+      }
+      else {
+        chat.system('전체 화면을 열지 못했습니다.', true);
+      }
+    }
+  }
+  else if ($('video').webkitEnterFullscreen) {
+    $('video').webkitEnterFullscreen();
+  }
+  resumeVideo();
+});
+document.addEventListener('fullscreenchange', () => {
+  const active = Boolean(document.fullscreenElement);
+
+  $('fullscreen').classList.toggle('active', active);
+  $('fullscreen').title = active ? '전체 화면 해제 (F)' : '전체 화면 (F)';
+
+  if (!active) {
+    window.screen.orientation?.unlock?.();
+  }
+  else if (pip.mobile && window.screen.orientation?.lock) {
+    void window.screen.orientation.lock('landscape').catch(() => {});
   }
 });
 $('rewind').addEventListener('click', () => {
@@ -1551,6 +1931,7 @@ $('rewind').addEventListener('click', () => {
   controls();
 });
 $('live').addEventListener('click', () => {
+  paused = false;
   sync();
   $('video')
     .play()
@@ -1643,7 +2024,15 @@ document.addEventListener('keydown', event => {
 });
 $('video').addEventListener('timeupdate', controls);
 $('video').addEventListener('seeked', controls);
-$('video').addEventListener('pause', controls);
+$('video').addEventListener('pause', () => {
+  const video = $('video');
+  if (attached && video.controls && !document.hidden && video.readyState >= 3 && notice !== '로딩 중'
+    && !(pip.mobile && pip.pending())) {
+    paused = true;
+  }
+  if (!video.muted && (document.hidden || pip.pending())) resumeVideo();
+  controls();
+});
 $('video').addEventListener('volumechange', controls);
 for (const event of ['waiting', 'stalled']) {
   $('video').addEventListener(event, () => {
@@ -1655,10 +2044,19 @@ for (const event of ['waiting', 'stalled']) {
   });
 }
 $('video').addEventListener('playing', () => {
+  paused = false;
   if (notice === '로딩 중') {
     overlay('');
   }
 });
+const resumeVideo = () => {
+  const video = $('video');
+  if (attached && !paused && !pip.dismissed()
+    && video.paused && video.readyState >= 1) {
+    void video.play().catch(() => {});
+  }
+};
+$('video').addEventListener('canplay', resumeVideo);
 $('video').addEventListener('loadeddata', () => {
   if (paused) {
     $('video').pause();
@@ -1681,21 +2079,75 @@ $('video').addEventListener('loadeddata', () => {
   controls();
 });
 $('video').addEventListener('play', () => {
-  if (live) {
+  if (live && !pip.pending()) {
     sync();
   }
 
   controls();
 });
+if ('mediaSession' in navigator) {
+  const session = navigator.mediaSession;
+  const actions = {
+    enterpictureinpicture: () => {
+      if (!paused && !$('video').ended) void pip.enter().catch(() => {});
+    },
+    play: () => { paused = false; void $('video').play().catch(() => {}); },
+    pause: () => { paused = true; $('video').pause(); },
+    seekbackward: data => {
+      live = false;
+      $('video').currentTime = Math.max(0, $('video').currentTime - (data.seekOffset || 10));
+    },
+    seekforward: data => {
+      live = false;
+      $('video').currentTime = Math.min(position() ?? $('video').duration,
+        $('video').currentTime + (data.seekOffset || 10));
+    }
+  };
+
+  for (const [action, handler] of Object.entries(actions)) {
+    try {
+      session.setActionHandler(action, handler);
+    } catch {}
+  }
+
+  for (const event of ['play', 'pause', 'ended']) {
+    $('video').addEventListener(event, () => {
+      session.playbackState = $('video').paused ? 'paused' : 'playing';
+    });
+  }
+}
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && live && !$('video').paused) {
-    sync();
+  if (document.hidden) {
+    if (!$('video').muted) resumeVideo();
+  }
+  else {
+    if (live && !paused && !pip.pending()) sync();
+    resumeVideo();
+    restartWatch();
+    if (player && !watching) watching = setInterval(() => void play(), 3000);
+    void load();
   }
 });
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', event => {
   remember();
+  if (pip.active() || pip.pending()) return;
   clearInterval(watching);
-  stop();
+  watching = null;
+  editorController?.abort();
+  clearTimeout(editorRetry);
+  if (!event.persisted) {
+    pip.close();
+    stop();
+  }
+});
+window.addEventListener('pageshow', async event => {
+  if (event.persisted) {
+    await access();
+    restartWatch();
+    if (player && !watching) watching = setInterval(() => void play(), 3000);
+    void load();
+    resumeVideo();
+  }
 });
 
 function avatar(id, value) {
@@ -1878,9 +2330,6 @@ function statistics(data) {
   const tags = $('video-tags');
 
   tags.replaceChildren();
-  $('video-clip').disabled = !active || !broadcast.number;
-  $('video-clip').dataset.broad = broadcast.number || '';
-  $('video-clip').dataset.streamer = profile?.id || data.player || '';
 
   if (active) {
     const hashtags = String(broadcast.hashtag || '')
@@ -1944,15 +2393,21 @@ function statistics(data) {
   $('video-password').hidden = !active || !data.restricted?.password;
   $('video-adult').hidden = !active || !data.restricted?.adult;
   avatar('video-portrait', profile?.image);
-  $('video-station').href = new URL(
-    `/station/${encodeURIComponent(profile?.id || data.player || '')}`,
-    DOMAIN.soop
-  ).href;
-
-  $('video-name').href = $('video-station').href;
 
   $('video-subscription').classList.toggle('active', profile?.subscribed === true);
+  $('video-subscription').href = `https://st.sooplive.com/app/gift_subscription.php?bjId=${encodeURIComponent(data.player || player)}&broadNo=${encodeURIComponent(data.broadcast?.number || '')}&sysType=html5&location=live`;
   $('video-favorite').classList.toggle('active', profile?.favorite === true);
+  $('video-favorite').title = profile?.favorite === true ? '즐겨찾기 해제' : '즐겨찾기 추가';
+  const upKey = `${data.player || ''}:${data.homeAccount || ''}`;
+  if ($('video-up').dataset.player !== upKey) {
+    $('video-up').dataset.player = upKey;
+    $('video-up').classList.remove('active');
+    $('video-up').title = 'UP';
+  }
+  if (typeof profile?.up === 'boolean') {
+    $('video-up').classList.toggle('active', profile.up);
+    $('video-up').title = profile.up ? '이미 UP했습니다.' : 'UP';
+  }
   $('members-count').textContent = Number(data.viewers || 0).toLocaleString('ko-KR');
 
   const date = active && profile.station?.broad_start;
@@ -1963,35 +2418,42 @@ function statistics(data) {
 }
 
 function assets(data) {
+  broadcastAccess.update(data);
+  home.update(data);
+  connect.update(data);
+  quick.update(data);
   chat.update(data);
   statistics(data);
   ceremonies = data.ceremonies || {};
 
   const origin = data.origins?.[0];
 
-  link = origin ? new URL(`/#${token}`, origin).href : '';
+  link = origin ? new URL(`${window.location.pathname}#${token}`, origin).href : '';
   $('link-copy').hidden = !link;
 
   const name = data.name || '';
 
-  $('broadcaster').textContent = name;
-  document.title = name || '매크로';
+  const broadcastTitle = data.broadcast?.title || data.profile?.broad?.broad_title || name || '매크로';
+
+  document.title = data.player ? pip.active() ? broadcastTitle : name || '매크로' : '\u200b';
+  pip.title(broadcastTitle);
+
+  if ('mediaSession' in navigator && typeof window.MediaMetadata === 'function') {
+    const metadata = navigator.mediaSession.metadata;
+    const image = data.profile?.image || '';
+
+    if (metadata?.title !== broadcastTitle || metadata?.artist !== name
+      || (metadata?.artwork?.[0]?.src || '') !== image) {
+      navigator.mediaSession.metadata = new window.MediaMetadata({
+        title: broadcastTitle, artist: name,
+        artwork: image ? [{ src: image }] : []
+      });
+    }
+  }
 
   const profile = data.profile;
 
   broadcaster = profile;
-
-  const station = profile?.id || data.player;
-
-  if (station) {
-    $('station').href = new URL(
-      `/station/${encodeURIComponent(station)}`,
-      DOMAIN.soop
-    ).href;
-  }
-  else {
-    $('station').removeAttribute('href');
-  }
 
   const emblem = profile?.status?.emblem_img_url;
   const grade = String(profile?.status?.emblem_grade || '').toLowerCase();
@@ -2002,19 +2464,41 @@ function assets(data) {
     title += level.slice(2);
   }
 
-  avatar('portrait', profile?.image);
-  avatar('emblem', emblem);
-  $('emblem').title = title;
   avatar('video-emblem', emblem);
   $('video-emblem').title = title;
   $('information').disabled = !profile;
+  $('video-station').disabled = !profile;
+  $('video-name').disabled = !profile;
+
+  $('menu-notify').checked = Boolean(data.notification?.config.enabled);
 
   const channel = data.player || '';
+
+  for (const id of ['macro-open', 'logs-open', 'notify-open']) {
+    $(id).hidden = !channel;
+  }
+  for (const id of ['menu-enabled', 'menu-notify']) {
+    $(id).closest('label').hidden = !channel;
+  }
 
   $('screen').hidden = !channel;
 
   if (player !== channel) {
+    generation++;
+    streamController?.abort();
+    streamController = null;
+    fetching = false;
+    pending = undefined;
+    stop();
+    $('qualities').replaceChildren();
+    $('quality').disabled = true;
+    $('video-save').hidden = true;
+    $('video-save').dataset.url = '';
     player = channel;
+
+    if ($('notify').open) {
+      $('notify').close();
+    }
     live = true;
     clearInterval(watching);
     saved = undefined;
@@ -2056,27 +2540,70 @@ function assets(data) {
   }
 }
 
+function beginTransition() {
+  quick.close();
+  pip.close();
+  transitioning = true;
+  generation++;
+  streamController?.abort();
+  streamController = null;
+  fetching = false;
+  pending = undefined;
+  clearInterval(watching);
+  stop();
+  player = '';
+  $('video-save').hidden = true;
+  $('video-save').dataset.url = '';
+  overlay('로딩 중');
+}
+
+async function finishTransition() {
+  while (busy) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  transitioning = false;
+  await load();
+}
+
 async function load() {
-  if (busy) {
+  if (busy || transitioning) {
     return;
   }
 
   busy = true;
 
+  const current = generation;
+
   try {
     const data = await request();
 
-    if (!config || (!dirty && revision !== data.revision)) {
-      apply(data);
-      status('');
-    }
-    else if (dirty && revision !== data.revision) {
-      status('파일이 변경되었습니다. 화면을 새로고침해주세요.', true);
+    if (homeView) {
+      data.player = '';
+      data.sessionReady = true;
     }
 
+    if (current !== generation || transitioning) {
+      return;
+    }
+
+    if (player !== data.player || !config || (!dirty && revision !== data.revision)) {
+      apply(data);
+      macroStatus('');
+    }
+    else if (dirty && revision !== data.revision) {
+      macroStatus('파일이 변경되었습니다. 화면을 새로고침해주세요.', true);
+    }
+
+    inbox.update(data);
+    $('home-end').dataset.locked = String(Boolean(data.fixed));
+    $('home-end').disabled = Boolean(data.fixed);
     assets(data);
+    $('header').hidden = false;
+    document.body.classList.remove('loading');
+    $('loading').hidden = true;
   } catch (error) {
-    status(error.message, true);
+    macroStatus(error.message, true);
   } finally {
     busy = false;
     $('save').disabled = !dirty;
@@ -2241,13 +2768,13 @@ $('save').addEventListener('click', async () => {
       roulette(rule);
     }
 
-    const data = await request('PUT', { config, revision });
+    const data = await request('PUT', { config, revision, player });
 
     apply(data);
     assets(data);
-    status('저장했습니다.');
+    macroStatus('');
   } catch (error) {
-    status(error.message, true);
+    macroStatus(error.message, true);
   } finally {
     busy = false;
     $('form').inert = false;
@@ -2259,29 +2786,102 @@ $('save').addEventListener('click', async () => {
   }
 });
 
+const styles = new Map();
+
+function stylesheet(data) {
+  for (const [path, revision] of data) {
+    if (!['/style.css', '/chat.css'].includes(path) || styles.get(path) === revision) {
+      continue;
+    }
+
+    const previous = document.querySelector(`link[rel="stylesheet"][href^="${path}"]`);
+
+    if (!previous) {
+      continue;
+    }
+
+    styles.set(path, revision);
+    const link = previous.cloneNode();
+
+    link.href = `${path}?revision=${encodeURIComponent(revision)}`;
+    link.addEventListener('load', () => {
+      if (styles.get(path) === revision) {
+        previous.remove();
+      }
+      else {
+        link.remove();
+      }
+    }, { once: true });
+    link.addEventListener('error', () => {
+      link.remove();
+      if (styles.get(path) === revision) {
+        styles.delete(path);
+      }
+    }, { once: true });
+    previous.after(link);
+  }
+}
+
+let editorController;
+let editorRetry;
+let editorEpoch = 0;
+
+function restartWatch() {
+  editorEpoch++;
+  editorController?.abort();
+  editorController = null;
+  clearTimeout(editorRetry);
+  void watch();
+}
+
 async function watch() {
+  if (editorController) return;
+  const controller = new AbortController();
+  const epoch = editorEpoch;
+  editorController = controller;
   try {
     const response = await fetch('/api/editor', {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'text/event-stream'
-      }
+      },
+      signal: controller.signal
     });
 
     if (response.ok) {
       const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
 
       while (true) {
         const result = await reader.read();
 
-        if (result.done) {
+        if (result.done || epoch !== editorEpoch) {
           break;
+        }
+
+        buffer += decoder.decode(result.value, { stream: true }).replace(/\r\n/g, '\n');
+        let boundary;
+
+        while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+          const lines = buffer.slice(0, boundary).split('\n');
+
+          buffer = buffer.slice(boundary + 2);
+          if (lines.includes('event: style')) {
+            const data = lines.filter(line => line.startsWith('data: '))
+              .map(line => line.slice(6)).join('\n');
+
+            stylesheet(JSON.parse(data));
+          }
         }
       }
     }
   } catch {}
 
-  setTimeout(watch, 2000);
+  if (editorController === controller) editorController = null;
+  if (!controller.signal.aborted && epoch === editorEpoch) {
+    editorRetry = setTimeout(watch, 2000);
+  }
 }
 
 window.addEventListener('beforeunload', event => {
@@ -2294,6 +2894,16 @@ window.addEventListener('beforeunload', event => {
 $('information').addEventListener('click', () => {
   inspect(broadcaster);
 });
+
+for (const id of ['video-station', 'video-name']) {
+  $(id).addEventListener('click', () => {
+    void chat.profile({
+      id: broadcaster.id,
+      name: $('video-name').textContent,
+      role: '스트리머'
+    });
+  });
+}
 
 $('profile-close').addEventListener('click', () => {
   $('profile').close();
@@ -2325,6 +2935,8 @@ function notification(data) {
   const groups = new Map();
 
   $('notify-enabled').checked = config.enabled;
+  $('menu-notify').checked = config.enabled;
+  inbox.enable(config.enabled);
   $('notify-server').value = config.server;
   $('notify-topic').value = config.topic;
   $('notify-token').value = '';
@@ -2335,7 +2947,8 @@ function notification(data) {
   $('notify-nicknames').value = config.nicknames.join('\n');
   $('notify-events').replaceChildren();
 
-  for (const [key, [group, name]] of Object.entries(data.events)) {
+  for (const [key, [section, name]] of Object.entries(data.events)) {
+    const group = section === '콘텐츠' ? name.split(' ')[0] : section;
     if (!groups.has(group)) {
       const field = document.createElement('fieldset');
       const title = document.createElement('legend');
@@ -2354,7 +2967,7 @@ function notification(data) {
     input.type = 'checkbox';
     input.dataset.event = key;
     input.checked = config.events[key];
-    text.textContent = name;
+    text.textContent = section === '콘텐츠' ? name.slice(group.length + 1) : name;
     label.append(input, text);
     groups.get(group).append(label);
   }
@@ -2367,6 +2980,7 @@ function notifications() {
     })
   );
   const config = {
+    player,
     enabled: $('notify-enabled').checked,
     server: $('notify-server').value.trim(),
     topic: $('notify-topic').value.trim(),
@@ -2394,11 +3008,12 @@ $('notify-open').addEventListener('click', async () => {
     const data = await request('GET', undefined, '/api/notify');
 
     notification(data);
-    $('notify-connection').open = !data.connected;
+    $('notify-connection').open = true;
     $('notify-status').hidden = true;
     $('notify').showModal();
+    await device.refresh();
   } catch (error) {
-    status(error.message, true);
+    macroStatus(error.message, true);
   } finally {
     $('notify-open').disabled = false;
   }
@@ -2406,60 +3021,94 @@ $('notify-open').addEventListener('click', async () => {
 
 $('notify-close').addEventListener('click', () => $('notify').close());
 
-async function notify(method) {
-  $('notify-test').disabled = true;
+async function notify() {
   $('notify-save').disabled = true;
   $('notify-status').hidden = true;
 
   try {
-    const data = await request(method, notifications(), '/api/notify');
+    const data = await request('PUT', notifications(), '/api/notify');
 
-    if (method === 'PUT') {
-      notification(data);
-    }
+    notification(data);
 
-    $('notify-status').textContent = method === 'PUT' ? '저장되었습니다.' : '알림을 전송했습니다.';
+    $('notify-status').textContent = '저장되었습니다.';
     $('notify-status').classList.remove('error');
   } catch (error) {
     $('notify-status').textContent = error.message;
     $('notify-status').classList.add('error');
   } finally {
     $('notify-status').hidden = false;
-    $('notify-test').disabled = false;
     $('notify-save').disabled = false;
   }
 }
 
 $('notify-form').addEventListener('submit', event => {
   event.preventDefault();
-  void notify('PUT');
+  void notify();
 });
-
-$('notify-test').addEventListener('click', () => void notify('POST'));
 
 $('link-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(link);
     $('link-copy').textContent = '복사되었습니다';
     setTimeout(() => {
-      $('link-copy').textContent = '접속 주소 복사';
+      $('link-copy').textContent = '주소 복사';
     }, 2000);
   } catch {
-    status('접속 주소를 복사할 수 없습니다.', true);
+    macroStatus('주소를 복사할 수 없습니다.', true);
   }
 });
 
-$('menu-enabled').addEventListener('change', () => {
-  if (!config) {
+$('menu-notify').addEventListener('change', async () => {
+  const button = $('menu-notify');
+  const enabled = button.checked;
+
+  button.disabled = true;
+
+  try {
+    const data = await request('PUT', { enabled, player }, '/api/notify');
+
+    button.checked = data.config.enabled;
+    $('notify-enabled').checked = data.config.enabled;
+    inbox.enable(data.config.enabled);
+  } catch (error) {
+    button.checked = !enabled;
+    chat.system(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('menu-enabled').addEventListener('change', async () => {
+  if (!config || busy) {
+    $('menu-enabled').checked = Boolean(config?.enabled);
     return;
   }
 
-  $('enabled').checked = $('menu-enabled').checked;
-  config.enabled = $('enabled').checked;
-  changed();
+  busy = true;
+  $('menu-enabled').disabled = true;
+  $('enabled').disabled = true;
+  $('save').disabled = true;
 
-  if (config.enabled) {
-    popup();
+  try {
+    const data = await request('PUT', {
+      enabled: $('menu-enabled').checked,
+      player,
+      revision
+    });
+
+    config.enabled = data.config.enabled;
+    revision = data.revision;
+    $('enabled').checked = config.enabled;
+    $('menu-enabled').checked = config.enabled;
+    macroStatus('');
+  } catch (error) {
+    $('menu-enabled').checked = config.enabled;
+    chat.system(error.message);
+  } finally {
+    busy = false;
+    $('menu-enabled').disabled = false;
+    $('enabled').disabled = false;
+    $('save').disabled = !dirty;
   }
 });
 
@@ -2471,28 +3120,7 @@ $('macro-back').addEventListener('click', () => {
   $('macros').dataset.page = 'list';
 });
 
-for (const id of ['profile', 'macros', 'notify']) {
-  $(id).addEventListener('click', event => {
-    if (event.target !== $(id)) {
-      return;
-    }
-
-    const bounds = $(id).getBoundingClientRect();
-    const outside =
-      event.clientX < bounds.left
-      || event.clientX > bounds.right
-      || event.clientY < bounds.top
-      || event.clientY > bounds.bottom;
-
-    if (outside) {
-      $(id).close();
-    }
-  });
-}
-
 for (const id of [
-  'portrait',
-  'emblem',
   'profile-portrait',
   'video-portrait',
   'video-emblem'
@@ -2502,10 +3130,109 @@ for (const id of [
   });
 }
 
-const chat = createChat(() => token, inspect);
-const broadcastTimer = setInterval(duration, 1000);
+await access();
 
-window.addEventListener('pagehide', () => clearInterval(broadcastTimer));
+const chat = createChat(() => token, inspect, target => connect.select(target));
+const connect = createConnect(request, finishTransition, beginTransition, chat.signin, homeView);
+const livePreview = createLivePreview(request);
+createSearch(request, connect.select, chat.profile, livePreview);
+const quick = createQuick(request, load, error => chat.system(error.message, true));
+const home = createHome(request, connect.select, chat.profile, chat.signin, livePreview);
+const homeDialog = $('home-return');
+let ending = false;
+function homeUrl() {
+  const url = new URL(window.location.href);
+  url.pathname = '/';
+  url.search = '';
+  url.hash = '';
+  return url.href;
+}
+const endBroadcast = async () => {
+  if (ending) {
+    return;
+  }
+  ending = true;
+  for (const id of ['home-end', 'home-keep', 'home-end-submit', 'home-return-close']) {
+    $(id).disabled = true;
+  }
+  try {
+    await request('POST', { password: $('home-end-password').value }, '/api/leave');
+    $('home-end-password').value = '';
+    window.location.assign(homeUrl());
+  } catch (error) {
+    $('access-message').textContent = error.message;
+    $('access-error').showModal();
+  } finally {
+    ending = false;
+    for (const id of ['home-end', 'home-keep', 'home-end-submit', 'home-return-close']) {
+      $(id).disabled = false;
+    }
+  }
+};
+$('home-return-close').addEventListener('click', () => homeDialog.close());
+homeDialog.addEventListener('cancel', event => {
+  if (ending) event.preventDefault();
+});
+$('access-error').addEventListener('close', () => {
+  if (homeDialog.open && !$('home-end-form').hidden) $('home-end-password').focus();
+});
+$('home-keep').addEventListener('click', () => {
+  window.location.assign(homeUrl());
+});
+$('home-end').addEventListener('click', async () => {
+  $('home-end').disabled = true;
+  try {
+    const entry = await request('GET', undefined, '/api/entry');
+    if (entry.fixed) return;
+    if (entry.leavePassword) {
+      $('home-return-choices').hidden = true;
+      $('home-end-form').hidden = false;
+      $('home-end-password').focus();
+    } else {
+      await endBroadcast();
+    }
+  } catch (error) {
+    $('home-return-error').textContent = error.message;
+    $('home-return-error').hidden = false;
+  } finally {
+    $('home-end').disabled = $('home-end').dataset.locked === 'true';
+  }
+});
+$('home-end-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void endBroadcast();
+});
+$('home-open').addEventListener('click', event => {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  if (transitioning || busy) {
+    return;
+  }
+
+  if (/\/search\/?$/.test(location.pathname)) {
+    window.location.assign(homeUrl());
+    return;
+  }
+
+  if (homeView) {
+    return;
+  }
+  $('home-return-choices').hidden = false;
+  $('home-end-form').hidden = true;
+  $('home-end-password').value = '';
+  $('home-return-error').hidden = true;
+  homeDialog.showModal();
+});
+let broadcastTimer = setInterval(duration, 1000);
+
+window.addEventListener('pagehide', () => {
+  if (pip.active() || pip.pending()) return;
+  clearInterval(broadcastTimer);
+  broadcastTimer = null;
+});
+window.addEventListener('pageshow', event => {
+  if (event.persisted && !broadcastTimer) broadcastTimer = setInterval(duration, 1000);
+});
 
 watch();
 await load();

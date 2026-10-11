@@ -55,8 +55,8 @@ async function occupied(port, center, ignored) {
   return connected;
 }
 
-async function discover() {
-  const ws = new WebSocket(DOMAIN.package, 'package', { origin: DOMAIN.play });
+async function discover(address, options = {}, socket) {
+  const ws = new WebSocket(address, 'package', { ...options, origin: DOMAIN.play });
   const port = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => finish(new Error('패키지 응답 시간 초과')), 2000);
     const finish = (error, value) => {
@@ -78,12 +78,15 @@ async function discover() {
         const packet = JSON.parse(data.toString());
 
         if (packet.SVC === 'HTMLPORT') {
-          finish(null, Number(packet.DATA?.HTMLPLAYER_PORT));
+          const value = Number(packet.DATA?.HTMLPLAYER_PORT);
+          finish(Number.isInteger(value) && value > 0 && value <= 65535
+            ? null : new Error('패키지 정보 없음'), value);
         }
       } catch {}
     });
     ws.on('error', error => finish(error));
     ws.on('close', () => finish(new Error('패키지 연결 종료')));
+    socket?.(ws);
   }).finally(() => {
     if (ws.readyState === WebSocket.CONNECTING) {
       ws.terminate();
@@ -96,11 +99,24 @@ async function discover() {
   return port;
 }
 
+async function findPackage(options, socket, cancelled) {
+  let failure;
+  for (const address of DOMAIN.package) {
+    if (cancelled?.()) throw new Error('패키지 연결 취소');
+    try {
+      return await discover(address, options, socket);
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
+}
+
 export class Package extends EventEmitter {
   static async available(connection, center) {
     try {
       const socket = connection?.ws?._socket;
-      const port = socket?.remotePort || (await discover());
+      const port = socket?.remotePort || (await findPackage());
 
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         return false;
@@ -157,61 +173,12 @@ export class Package extends EventEmitter {
     const result = new Promise((resolve, reject) => {
       this.wait(resolve, reject);
 
-      const ws = new WebSocket(DOMAIN.package, 'package', {
-        ...this.network.socketOptions,
-        origin: DOMAIN.play
-      });
-
-      this.manager = ws;
-
-      ws.on('open', () => {
-        ws.send(
-          JSON.stringify({
-            SVC: 'CAPTION',
-            RESULT: 1,
-            DATA: { nCaption: 5 }
-          })
-        );
-      });
-      ws.on('message', data => {
-        if (this.closed || this.ws || this.manager !== ws) {
-          return;
-        }
-
-        let packet;
-
-        try {
-          packet = JSON.parse(data.toString());
-        } catch {
-          return;
-        }
-
-        if (!packet || packet.SVC !== 'HTMLPORT') {
-          return;
-        }
-
-        const port = Number(packet.DATA?.HTMLPLAYER_PORT);
-
-        if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          this.fail(new Error('패키지 정보 없음'));
-
-          return;
-        }
-
+      void findPackage(this.network.socketOptions, ws => {
+        this.manager = ws;
+      }, () => this.closed).then(port => {
         this.manager = null;
-        ws.close();
-        void this.reserve(port);
-      });
-      ws.on('error', () => {
-        if (this.manager === ws) {
-          this.fail(new Error('패키지 연결 실패'));
-        }
-      });
-      ws.on('close', () => {
-        if (this.manager === ws) {
-          this.fail(new Error('패키지 연결 종료'));
-        }
-      });
+        if (!this.closed) void this.reserve(port);
+      }).catch(error => this.fail(error));
     });
 
     return result;
@@ -238,7 +205,7 @@ export class Package extends EventEmitter {
   }
 
   open(port) {
-    const url = new URL(DOMAIN.package);
+    const url = new URL(DOMAIN.package[0]);
 
     url.port = String(port);
     url.pathname = `/Websocket/${encodeURIComponent(this.bjId)}`;

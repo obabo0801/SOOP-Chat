@@ -1,8 +1,9 @@
 import { config } from 'dotenv';
 import readline from 'readline';
+import fs from 'fs';
 import { SoopClient } from '#soop/client';
 import { SoopMacro } from '#soop/macro';
-import { SoopNotify } from '#soop/notify';
+import * as notify from '#soop/notify';
 import { openEditor } from '#soop/editor';
 import { DOMAIN } from '#soop/config';
 import * as http from '#soop/http';
@@ -11,8 +12,28 @@ import * as log from '#utils/log';
 import * as weflab from '#utils/weflab';
 import { parseEnv } from '#utils/env';
 import { load, get } from '#utils/config';
+import { readSession } from './soop/editor/launch.js';
+import { readRecovery, stopRecovery } from './soop/editor/runtime.js';
 
 config({ quiet: true });
+const session = readSession();
+const recovery = await readRecovery(session);
+
+if (session && recovery?.settings) {
+  Object.assign(session, recovery.settings);
+}
+
+if (session?.lock && process.env.SOOPWORKER !== '1') {
+  process.on('exit', () => {
+    try {
+      const lease = JSON.parse(fs.readFileSync(session.lock, 'utf8'));
+
+      if (lease.id === session.lease) {
+        fs.rmSync(session.lock, { force: true });
+      }
+    } catch {}
+  });
+}
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -44,13 +65,28 @@ let login;
     bjId,
     broadPw,
     auto,
+    scheduled: getConfig('scheduled'),
     pver,
     subtitle,
     idle: process.env.IDLE?.toLowerCase() === 'true',
     userAgent: process.env.USER_AGENT || undefined
   });
 
-  new SoopNotify(client);
+  if (session || recovery?.settings) {
+    const account = recovery?.settings || session;
+    client.cookie = account.cookie || undefined;
+    client.info = recovery?.stored ? null : account.info || null;
+    client.signedout = !account.cookie;
+  }
+
+  new notify.SoopNotify(client, {
+    editor: () => {
+      const origin = getConfig('origins')?.[0];
+
+      return session && origin
+        ? new URL(`/${session.port - session.range.start + 1}/`, origin).href : origin || editor?.url;
+    }
+  });
 
   client.on('live', data => {
     if (data.result === -1 && data.message) {
@@ -74,8 +110,7 @@ let login;
         return;
 
       case 0:
-        message = `${data.bjNick}(${data.bjId})님 방송에 연결 대기 중입니다.`;
-        break;
+        return;
 
       case -6:
       case -8:
@@ -103,10 +138,13 @@ let login;
         log.load(`[${label}]`, data.url);
       }
 
+      const content = ['post', 'edit'].includes(event) && data.type === 'post'
+        ? notify.preview(data.content, Infinity) : '';
       const message =
         `${data.bjNick}님이 ${action} | `
         + `제목: ${data.title} | `
-        + `작성일: ${data.regDate}`;
+        + `작성일: ${data.regDate}`
+        + (content ? ` | 내용: ${content}` : '');
 
       log.info('\x1b[94m[알림]\x1b[0m', `\x1b[1m${message}\x1b[0m`);
     });
@@ -153,23 +191,24 @@ let login;
 
       log.info(
         `[${label} ${action}]`,
-        `${data.userNick}(${data.userId}) | 게시글: ${data.title} | ${data.message}`
+        `${data.userNick}(${data.userId}) | 게시글: ${data.title} | ${notify.preview(data.message, Infinity)}`
       );
     });
   }
 
   for (const event of ['like', 'unlike']) {
     client.on(event, data => {
-      const label = { post: '게시글', comment: '댓글', reply: '답글' }[data.type];
+      const content = { post: '게시글', clip: '클립', catch: '캐치' }[data.contentType || data.type] || '게시글';
+      const label = { comment: '댓글', reply: '답글' }[data.type] || content;
       const action = event === 'like' ? '좋아요' : '좋아요 취소';
 
       if (isLink && data.url) {
         log.load(`[${label}]`, data.url);
       }
 
-      let message = `게시글: ${data.title}`;
+      let message = `${content}: ${data.title}`;
 
-      if (data.type !== 'post') {
+      if (['comment', 'reply'].includes(data.type)) {
         message += ` | 작성자: ${data.userNick}(${data.userId}) | ${data.message}`;
       }
 
@@ -1299,7 +1338,7 @@ let login;
     login.unref();
   });
 
-  if (cookie || getConfig('userId')) {
+  if (bjId && (cookie || !recovery && getConfig('userId'))) {
     const channel = await client.safe(() => client.sendLiveInfo());
 
     if (stopTask || client.closed) {
@@ -1308,7 +1347,7 @@ let login;
 
     const result = Number(channel?.RESULT);
 
-    if ([1, -6, -8].includes(result)) {
+    if ([0, 1, -6, -8].includes(result)) {
       await authenticate();
     }
   }
@@ -1317,7 +1356,9 @@ let login;
     return;
   }
 
-  await client.connect();
+  if (client.bjId) {
+    await client.connect();
+  }
 })().catch(error => {
   log.error(error);
   prompt();
@@ -1327,6 +1368,8 @@ function shutdown() {
   if (stopTask) {
     return stopTask;
   }
+
+  stopRecovery();
 
   clearTimeout(login);
   login = null;
@@ -1338,7 +1381,7 @@ function shutdown() {
     let code = 0;
 
     try {
-      await editor?.close();
+      await editor?.close({ forget: Boolean(session) });
       await macro?.close();
       await client?.destroy();
     } catch {
@@ -1376,6 +1419,13 @@ function loadConfig() {
 }
 
 function getConfig(name) {
+  if (recovery?.settings && Object.hasOwn(recovery.settings, name)) {
+    return recovery.settings[name];
+  }
+  if (session && Object.hasOwn(session, name)) {
+    return session[name];
+  }
+
   const result = process.env[get()?.[name]] ?? get()?.[name];
 
   if (typeof result === 'string') {
@@ -1386,7 +1436,7 @@ function getConfig(name) {
     const value = result.trim();
 
     if (name === 'origins') {
-      const origins = value.split(',').map(origin => origin.trim()).filter(Boolean);
+      const origins = value.split(/[,\r\n]+/).map(origin => origin.trim()).filter(Boolean);
 
       return origins;
     }
@@ -1551,10 +1601,26 @@ function testDonation(name, count) {
 }
 
 async function edit(browser = true) {
+  const port = getConfig('port') ?? 0;
+
   editor = await openEditor(macro, {
-    browser,
+    browser: recovery && !recovery.stored ? false : session?.browser ?? browser,
+    token: recovery?.editor?.token || session?.token,
+    accessToken: recovery?.editor?.accessToken,
+    recovery: recovery?.editor,
+    accounts: recovery?.accounts,
+    root: !session,
+    sessionReady: session?.sessionReady,
+    fixed: recovery?.editor?.fixed ?? (!session && Boolean(getConfig('bjId'))),
+    basicAccount: getConfig('basicAccount') || (!session ? getConfig('userId') : ''),
+    count: getConfig('count') ?? 10,
+    range: session?.range,
+    password: getConfig('screenPw') ?? '',
+    videoEnabled: getConfig('videoEnabled') !== false,
+    accessPassword: getConfig('accessPw') === 'ACCESSPW' ? '' : getConfig('accessPw') ?? '',
+    stop: session ? shutdown : undefined,
     host: getConfig('host') ?? '127.0.0.1',
-    port: getConfig('port') ?? 0,
+    port,
     origins: getConfig('origins') ?? [],
     account: () => ({
       cookie: getConfig('cookie'),
@@ -2280,7 +2346,7 @@ async function command(cmd) {
           break;
         }
 
-        log.info('[매크로]', macro.config.enabled ? '켜짐' : '꺼짐');
+        log.info('[매크로]', macro.enabled ? '켜짐' : '꺼짐');
         log.table(
           Object.fromEntries(macro.list().map((rule, index) => [index + 1, rule]))
         );

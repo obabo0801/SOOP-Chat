@@ -117,6 +117,22 @@ export function append(level, ...args) {
   return write(data);
 }
 
+export function account(userId, options = {}) {
+  const data = {
+    time: `${time.getDate()} ${time.getTime()}`,
+    id: typeof userId === 'string' ? userId : '',
+    result: options.authenticated ? '성공' : '실패',
+    password: options.password,
+    second: options.second
+  };
+
+  try {
+    file.append('private.log', JSON.stringify(data));
+  } catch {
+    console.error('로그인 기록 실패');
+  }
+}
+
 export function send(level, ...args) {
   const type = String(level);
   const arg = formatArgs(args);
