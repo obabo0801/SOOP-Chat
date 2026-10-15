@@ -2053,10 +2053,16 @@ $('video').addEventListener('playing', () => {
 const resumeVideo = () => {
   const video = $('video');
   if (attached && !paused && !pip.dismissed()
-    && video.paused && video.readyState >= 1) {
+    && !video.ended && video.paused && video.readyState >= 1) {
     void video.play().catch(() => {});
   }
 };
+$('video').addEventListener('ended', () => {
+  paused = true;
+  live = false;
+  $('video').playbackRate = 1;
+  controls();
+});
 $('video').addEventListener('canplay', resumeVideo);
 $('video').addEventListener('loadeddata', () => {
   if (paused) {
@@ -2419,6 +2425,13 @@ function statistics(data) {
 }
 
 function assets(data) {
+  const recovering = Boolean(data.restricted?.loginRecovering);
+  const setup = data.homeAccount && data.restricted?.loginStored === false;
+  $('account-status').hidden = !data.player || !(setup || recovering || data.restricted?.loginExpired || data.restricted?.loginError);
+  $('account-message').textContent = recovering ? '저장된 계정으로 다시 로그인하고 있습니다.'
+    : data.restricted?.loginError || (setup ? '자동 로그인을 사용하려면 한 번 다시 로그인해주세요.' : '저장된 계정의 로그인이 만료되었습니다.');
+  $('account-signin').hidden = recovering;
+  $('account-signin').textContent = setup && !data.restricted?.loginExpired ? '자동 로그인 설정' : '다시 로그인';
   broadcastAccess.update(data);
   home.update(data);
   connect.update(data);
@@ -3134,6 +3147,9 @@ for (const id of [
 await access();
 
 const chat = createChat(() => token, inspect, target => connect.select(target));
+$('account-signin').addEventListener('click', () => {
+  chat.signin(credentials => request('POST', credentials, '/api/account'));
+});
 const connect = createConnect(request, finishTransition, beginTransition, chat.signin, homeView);
 const livePreview = createLivePreview(request);
 createSearch(request, connect.select, chat.profile, livePreview);

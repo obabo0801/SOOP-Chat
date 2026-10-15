@@ -14,7 +14,7 @@ function handlerFiles(file) {
     }
   }
   files.push(new URL('../config.js', import.meta.url));
-  for (const name of ['proxy', 'launch', 'screens', 'storage', 'usage', 'previews', 'visit', 'push', 'media']) {
+  for (const name of ['proxy', 'launch', 'screens', 'storage', 'usage', 'previews', 'visit', 'push', 'media', 'credentials']) {
     files.push(new URL(`./${name}.js`, import.meta.url));
   }
   return files;

@@ -15,6 +15,10 @@ import { upStatus } from './storage.js';
 import * as push from './push.js';
 import * as media from './media.js';
 
+const credentialsModule = new URL('./credentials.js', import.meta.url);
+credentialsModule.search = new URL(import.meta.url).search;
+const credentials = await import(credentialsModule.href);
+
 const previewsModule = new URL('./previews.js', import.meta.url);
 previewsModule.search = new URL(import.meta.url).search;
 const { createPreviews } = await import(previewsModule.href);
@@ -283,17 +287,19 @@ export function createHandler(state) {
   };
   remember();
   state.logins ||= new Map();
-  const authenticate = async (login, options) => {
+  const authenticate = async (login, options, save = true) => {
     for (const [key, value] of state.logins) {
       if (value.expires <= Date.now()) state.logins.delete(key);
     }
-    let result, id, firstCookie;
+    let result, id, firstCookie, password, second;
     if (login?.challenge) {
       const pending = state.logins.get(login.challenge);
       if (!pending || typeof login.second !== 'string' || !login.second) {
         throw new Error('로그인을 다시 진행해주세요.');
       }
       id = pending.id;
+      password = pending.password;
+      second = login.second;
       firstCookie = pending.cookie;
       result = await api.secondLogin(id, login.second, { ...options, cookie: firstCookie });
       if (result?.data?.RESULT !== 1) {
@@ -308,17 +314,18 @@ export function createHandler(state) {
         throw new Error('아이디와 비밀번호를 입력해주세요.');
       }
       id = id.trim();
-      result = await api.login(id, login.password, options);
+      password = login.password;
+      second = login.second || login.secondPw || '';
+      result = await api.login(id, login.password, { ...options, cookie: undefined });
       if (result?.data?.RESULT === -11) {
         firstCookie = result.cookie;
-        const second = login.second || login.secondPw;
         if (second) {
           result = await api.secondLogin(id, second, { ...options, cookie: firstCookie });
         }
         else {
           const challenge = crypto.randomBytes(32).toString('hex');
           if (state.logins.size >= 32) state.logins.delete(state.logins.keys().next().value);
-          state.logins.set(challenge, { id, cookie: firstCookie, expires: Date.now() + 180000, attempts: 0 });
+          state.logins.set(challenge, { id, password, cookie: firstCookie, expires: Date.now() + 180000, attempts: 0 });
           return { second: true, challenge };
         }
       }
@@ -329,15 +336,65 @@ export function createHandler(state) {
     const cookie = { ...firstCookie, ...result.cookie };
     const info = await api.getPrivateInfo({ ...options, cookie });
     if (info?.IS_LOGIN !== 1) throw new Error('로그인 상태를 확인할 수 없습니다.');
+    if (info.LOGIN_ID?.toLowerCase() !== id.toLowerCase()) throw new Error('로그인 계정을 확인해주세요.');
+    if (save) credentials.accounts.save(id, { password, second });
     return { cookie, info };
   };
+  const savedLogin = id => {
+    const stored = credentials.accounts.load(id);
+    const configured = configuredAccount.userId === id ? configuredAccount : null;
+    const password = stored?.password || configured?.password;
+    return password ? { userId: id, password, second: stored?.second || configured?.secondPw || '' } : null;
+  };
   const client = macro.client;
+  client.reauthenticate = async () => {
+    const cookie = client.cookie;
+    const id = client.info?.LOGIN_ID || [...state.accounts.values()]
+      .find(value => api.cookieString(value.cookie) === api.cookieString(cookie))?.id;
+    if (!id || client.closed || client.signedout) return false;
+    const login = savedLogin(id);
+    if (!login) {
+      client.loginError = '자동 로그인을 사용하려면 한 번 다시 로그인해주세요.';
+      return false;
+    }
+    const result = await authenticate(login, client.network.httpOptions, false);
+    if (result.second) throw new Error('2차 비밀번호를 입력해 다시 로그인해주세요.');
+    if (client.closed || client.signedout || client.cookie !== cookie) return false;
+    credentials.accounts.save(id, { password: login.password, second: login.second });
+    client.cookie = result.cookie;
+    client.info = result.info;
+    client.loginExpired = false;
+    client.loginError = '';
+    state.cookie = null;
+    state.attempted = undefined;
+    remember();
+    state.screens?.publish();
+    return true;
+  };
+  if (client.loginExpired && !client.loginError && !client.renewal) {
+    void client.safe(async () => {
+      if (await client.recoverLogin() && !client.isOpen()) {
+        client.waiting = true;
+        await client.connect();
+      }
+    });
+  }
   if (client.cookie && !client.signedout && !client.info) {
     const cookie = api.cookieString(client.cookie);
     const saved = [...state.accounts.values()].find(value => api.cookieString(value.cookie) === cookie);
     const restore = info => {
       if (api.cookieString(client.cookie) !== cookie || client.signedout || client.info) return;
       if (info?.IS_LOGIN === 1) client.info = info;
+      else if (saved?.id) {
+        client.info = { IS_LOGIN: 0, LOGIN_ID: saved.id, LOGIN_NICK: saved.name || saved.id };
+        client.loginExpired = true;
+        void client.safe(async () => {
+          if (await client.recoverLogin() && !client.isOpen()) {
+            client.waiting = true;
+            await client.connect();
+          }
+        });
+      }
       else {
         client.cookie = undefined;
         client.info = null;
@@ -1014,6 +1071,7 @@ export function createHandler(state) {
               chat.broadcast('state', chat.state());
             }
             state.accounts.delete(data.id);
+            credentials.accounts.remove(data.id);
             state.screens?.list();
             reply(response, 200, {});
           } finally { state.signing = false; }
@@ -1116,7 +1174,8 @@ export function createHandler(state) {
 
               cookie = selected.cookie;
               info = selected.info;
-              login = !cookie && selected.configured ? account?.() : null;
+              login = !cookie ? savedLogin(selected.id) : null;
+              if (!cookie && !login) throw new Error('저장된 계정에 다시 로그인해주세요.');
             }
 
             if (data.account === 'guest') {
@@ -1145,10 +1204,16 @@ export function createHandler(state) {
               info = result.info;
             }
             else if (cookie && info?.IS_LOGIN !== 1) {
+              const id = data.identity || info?.LOGIN_ID || client.info?.LOGIN_ID;
               info = await api.getPrivateInfo({ ...options, cookie });
 
               if (info?.IS_LOGIN !== 1) {
-                throw new Error('로그인이 만료되었습니다. 새 계정으로 로그인해주세요.');
+                const stored = id && savedLogin(id);
+                if (!stored) throw new Error('저장된 계정에 다시 로그인해주세요.');
+                const result = await authenticate(stored, options);
+                if (result.second) throw new Error('2차 비밀번호를 입력해 다시 로그인해주세요.');
+                cookie = result.cookie;
+                info = result.info;
               }
             }
 
@@ -1863,7 +1928,10 @@ export function createHandler(state) {
 
             if (data.action === 'login') {
               if (client.info?.IS_LOGIN === 1 && !client.loginExpired) {
-                throw new Error('이미 로그인되어 있습니다.');
+                const id = data.id || state.logins.get(data.challenge)?.id;
+                if (id?.toLowerCase() !== client.info.LOGIN_ID?.toLowerCase()) {
+                  throw new Error('선택한 계정으로 로그인해주세요.');
+                }
               }
 
               const result = await authenticate(data, { ...client.network.httpOptions, cookie: client.cookie });
@@ -1874,6 +1942,7 @@ export function createHandler(state) {
               client.cookie = result.cookie;
               client.info = result.info;
               client.loginExpired = false;
+              client.loginError = '';
               await client.loadBasics();
               client.signedout = false;
               remember();
@@ -1900,6 +1969,7 @@ export function createHandler(state) {
               state.attempted = undefined;
               await client.logout();
               state.accounts.delete(id);
+              if (id) credentials.accounts.remove(id);
               state.screens?.list();
             }
             else {
@@ -2131,7 +2201,11 @@ export function createHandler(state) {
             categories: macro.client.channel?.CATEGORY_TAGS || []
           },
           restricted: {
+            loginStored: credentials.accounts.has(macro.client.info?.LOGIN_ID)
+              || Boolean(configuredAccount.userId === macro.client.info?.LOGIN_ID && configuredAccount.password),
             loginExpired: Boolean(macro.client.loginExpired),
+            loginRecovering: Boolean(macro.client.renewal),
+            loginError: macro.client.loginError || '',
             password: macro.client.channel?.BPWD === 'Y',
             passwordRequired: macro.client.channel?.BPWD === 'Y' && !macro.client.broadPw && !macro.client.isOpen(),
             adult: Number(macro.client.channel?.GRADE) >= 19

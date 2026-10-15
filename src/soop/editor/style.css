@@ -14,6 +14,23 @@ body {
   margin: 0;
 }
 
+#account-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgb(208 145 31 / 14%);
+  font-size: 13px;
+  word-break: keep-all;
+}
+
+#account-signin {
+  flex-shrink: 0;
+}
+
 body.loading > :not(dialog):not(#loading) {
   visibility: hidden;
 }

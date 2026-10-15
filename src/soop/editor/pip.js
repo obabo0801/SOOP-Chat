@@ -18,7 +18,7 @@ export function createPip(video, subtitle, title, update, caption, playing = () 
   const guard = () => { settling = Date.now() + 1200; };
   const resume = () => {
     if (mobile && playing() && (!document.hidden || active())
-      && video.paused && video.readyState >= 2) {
+      && !video.ended && video.paused && video.readyState >= 2) {
       void video.play().catch(() => {});
     }
   };

@@ -53,6 +53,7 @@ export class SoopClient {
     this.scheduleTimer = null;
     this.scheduled = options.scheduled || 0;
     this.loginExpired = false;
+    this.loginError = '';
     this.bjId = options.bjId;
 
     this.pver = options.pver ?? 2;
@@ -2087,7 +2088,18 @@ export class SoopClient {
     const get = index =>
       result[index].status === 'fulfilled' ? result[index].value : null;
 
-    const info = get(0);
+    let info = get(0);
+    if (this.cookie && info && Number(info.IS_LOGIN) !== 1) {
+      this.loginExpired = true;
+      if (await this.recoverLogin()) {
+        info = await http.getPrivateInfo({ ...this.network.httpOptions, cookie: this.cookie });
+      }
+      if (!info || Number(info.IS_LOGIN) !== 1) {
+        const error = new Error(this.loginError || '방송 로그인 인증이 만료되었습니다. 다시 로그인해주세요.');
+        error.code = 'SOOP_AUTH';
+        throw error;
+      }
+    }
     const category = get(1);
     const rule = get(2);
     const emoticon = get(3);
@@ -2236,33 +2248,53 @@ export class SoopClient {
     return value;
   }
 
-  async sendLiveInfo() {
-    const result = await http.postLiveInfo(this.bjId, {
-      ...this.network.httpOptions,
-      cookie: this.cookie,
-      onResponse: response => {
-        if (!http.cookieString(this.cookie).match(/(?:^|;\s*)AuthTicket=/)) return;
-        const expired = http.cookieExtract(response).some(cookie => {
-          if (!cookie.startsWith('AuthTicket=')) return false;
-          const expires = /(?:^|;)\s*expires=([^;]+)/i.exec(cookie)?.[1];
-          const age = /(?:^|;)\s*max-age=(-?\d+)/i.exec(cookie)?.[1];
-          return /^AuthTicket=;/.test(cookie) || age !== undefined && Number(age) <= 0
-            || expires && Date.parse(expires) <= Date.now();
-        });
-        if (expired) {
-          this.loginExpired = true;
-          const error = new Error('방송 로그인 인증이 만료되었습니다. 다시 로그인해주세요.');
-          error.code = 'SOOP_AUTH';
-          throw error;
-        }
-      }
-    });
-
-    if (result && !result.TK) {
-      result.TK = http.cookieString(this.cookie).match(/(?:^|;\s*)AuthTicket=([^;]*)/)?.[1] || '';
+  async recoverLogin() {
+    if (!this.reauthenticate || this.closed || this.signedout) return false;
+    if (!this.renewal) {
+      this.startViewer();
+      this.renewal = Promise.resolve().then(() => this.reauthenticate())
+        .catch(error => {
+          this.loginError = error.message || '자동 로그인에 실패했습니다. 다시 로그인해주세요.';
+          return false;
+        }).finally(() => { this.renewal = null; });
     }
+    return this.renewal;
+  }
 
-    return result;
+  async sendLiveInfo(retry = true) {
+    try {
+      const result = await http.postLiveInfo(this.bjId, {
+        ...this.network.httpOptions,
+        cookie: this.cookie,
+        onResponse: response => {
+          if (!http.cookieString(this.cookie).match(/(?:^|;\s*)AuthTicket=/)) return;
+          const expired = http.cookieExtract(response).some(cookie => {
+            if (!cookie.startsWith('AuthTicket=')) return false;
+            const expires = /(?:^|;)\s*expires=([^;]+)/i.exec(cookie)?.[1];
+            const age = /(?:^|;)\s*max-age=(-?\d+)/i.exec(cookie)?.[1];
+            return /^AuthTicket=;/.test(cookie) || age !== undefined && Number(age) <= 0
+              || expires && Date.parse(expires) <= Date.now();
+          });
+          if (expired) {
+            this.loginExpired = true;
+            const error = new Error('방송 로그인 인증이 만료되었습니다. 다시 로그인해주세요.');
+            error.code = 'SOOP_AUTH';
+            throw error;
+          }
+        }
+      });
+
+      if (result && !result.TK) {
+        result.TK = http.cookieString(this.cookie).match(/(?:^|;\s*)AuthTicket=([^;]*)/)?.[1] || '';
+      }
+
+      return result;
+    } catch (error) {
+      if (error.code === 'SOOP_AUTH' && retry && await this.recoverLogin()) {
+        return this.sendLiveInfo(false);
+      }
+      throw error;
+    }
   }
 
   async sendEmblem(userId = this.bjId) {
