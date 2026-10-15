@@ -78,7 +78,7 @@ function notification(node, message, emoticons) {
 }
 
 function donation(node, message, emoticons) {
-  const text = String(message);
+  const text = String(message).replace(/ 0(?:개|개월)$/, '');
   const match = text.match(/[\d,]+(?=개|개월)/);
 
   if (!match) {

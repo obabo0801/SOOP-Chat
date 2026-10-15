@@ -1245,6 +1245,12 @@ export async function requestRaw(url, options = {}) {
     return false;
   }
 
+  try {
+    options.onResponse?.(res);
+  } catch (error) {
+    await res.body?.cancel();
+    throw error;
+  }
   return res;
 }
 

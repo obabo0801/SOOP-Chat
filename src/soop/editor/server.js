@@ -225,6 +225,7 @@ export function createHandler(state) {
     Object.defineProperties(target, descriptors);
   };
   upgrade(macro.client, SoopClient);
+  if (macro.client.viewer) upgrade(macro.client.viewer, SoopClient);
   if (macro.client.network) upgrade(macro.client.network, Network);
   if (macro.client.bridge) upgrade(macro.client.bridge, Bridge);
   if (macro.client.package) upgrade(macro.client.package, SoopPackage);
@@ -356,6 +357,10 @@ export function createHandler(state) {
     }
   }
   if (state.screens) {
+    chat.scope = String(new URL(state.origin).port);
+    if (macro.client.connecting || macro.client.waiting || macro.client.scheduled > Date.now()) {
+      macro.client.startViewer();
+    }
     state.screens.close();
     state.screens = createScreens(state);
   }
@@ -1857,7 +1862,7 @@ export function createHandler(state) {
             }
 
             if (data.action === 'login') {
-              if (client.info?.IS_LOGIN === 1) {
+              if (client.info?.IS_LOGIN === 1 && !client.loginExpired) {
                 throw new Error('이미 로그인되어 있습니다.');
               }
 
@@ -1868,6 +1873,7 @@ export function createHandler(state) {
               }
               client.cookie = result.cookie;
               client.info = result.info;
+              client.loginExpired = false;
               await client.loadBasics();
               client.signedout = false;
               remember();
@@ -2125,6 +2131,7 @@ export function createHandler(state) {
             categories: macro.client.channel?.CATEGORY_TAGS || []
           },
           restricted: {
+            loginExpired: Boolean(macro.client.loginExpired),
             password: macro.client.channel?.BPWD === 'Y',
             passwordRequired: macro.client.channel?.BPWD === 'Y' && !macro.client.broadPw && !macro.client.isOpen(),
             adult: Number(macro.client.channel?.GRADE) >= 19

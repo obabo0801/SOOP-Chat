@@ -253,6 +253,7 @@ async function createEditor(macro, options = {}) {
 
   const origin = `http://${authority}:${server.address().port}`;
   macro.client.multiScope = String(server.address().port);
+  chat.scope = String(server.address().port);
 
   allowed.add(origin);
   context.screens = createScreens(context);

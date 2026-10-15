@@ -52,6 +52,7 @@ export class SoopClient {
     clearTimeout(this.scheduleTimer);
     this.scheduleTimer = null;
     this.scheduled = options.scheduled || 0;
+    this.loginExpired = false;
     this.bjId = options.bjId;
 
     this.pver = options.pver ?? 2;
@@ -233,6 +234,7 @@ export class SoopClient {
 
       if (this.info?.IS_LOGIN === 1) {
         this.signedout = false;
+        this.loginExpired = false;
         authenticated = true;
       }
 
@@ -277,6 +279,7 @@ export class SoopClient {
 
     if (this.info?.IS_LOGIN === 1) {
       this.signedout = false;
+      this.loginExpired = false;
     }
 
     const value = result.data.RESULT;
@@ -363,8 +366,10 @@ export class SoopClient {
       })
       .finally(() => {
         this.connecting = null;
-        if (!signal.aborted && !this.closed && !this.isOpen() && this.channel?.RESULT === 1) {
+        if (!signal.aborted && !this.closed && !this.isOpen()
+          && (this.channel?.RESULT === 1 || this.loginExpired)) {
           this.waiting = true;
+          this.startViewer();
           this.startLive();
         }
       });
@@ -375,7 +380,6 @@ export class SoopClient {
   }
 
   async openConnection(bjId = '', broadPw = '') {
-    await this.stopViewer();
     const signal = this.cancellation ?? this.signal;
 
     signal?.throwIfAborted();
@@ -389,6 +393,8 @@ export class SoopClient {
     }
 
     if (this.bjId !== bjId) {
+      await this.stopViewer();
+      signal?.throwIfAborted();
       this.stopPackage();
       this.emblem = null;
     }
@@ -479,6 +485,7 @@ export class SoopClient {
       return false;
     }
 
+    await this.stopViewer();
     this.waiting = false;
     this.stopLive();
     return true;
@@ -914,7 +921,7 @@ export class SoopClient {
 
   async checkLive() {
     if (this.closed || this.pending || this.connecting || this.scheduled > Date.now()
-      || !this.bjId || !(this.auto || this.waiting)) {
+      || this.loginExpired || !this.bjId || !(this.auto || this.waiting)) {
       return false;
     }
 
@@ -2040,6 +2047,9 @@ export class SoopClient {
 
   async loadBasics() {
     const result = await Promise.allSettled([this.sendLiveInfo(), this.sendStation()]);
+    if (result[0].status === 'rejected' && result[0].reason?.code === 'SOOP_AUTH') {
+      throw result[0].reason;
+    }
 
     const get = index =>
       result[index].status === 'fulfilled' ? result[index].value : null;
@@ -2229,7 +2239,23 @@ export class SoopClient {
   async sendLiveInfo() {
     const result = await http.postLiveInfo(this.bjId, {
       ...this.network.httpOptions,
-      cookie: this.cookie
+      cookie: this.cookie,
+      onResponse: response => {
+        if (!http.cookieString(this.cookie).match(/(?:^|;\s*)AuthTicket=/)) return;
+        const expired = http.cookieExtract(response).some(cookie => {
+          if (!cookie.startsWith('AuthTicket=')) return false;
+          const expires = /(?:^|;)\s*expires=([^;]+)/i.exec(cookie)?.[1];
+          const age = /(?:^|;)\s*max-age=(-?\d+)/i.exec(cookie)?.[1];
+          return /^AuthTicket=;/.test(cookie) || age !== undefined && Number(age) <= 0
+            || expires && Date.parse(expires) <= Date.now();
+        });
+        if (expired) {
+          this.loginExpired = true;
+          const error = new Error('방송 로그인 인증이 만료되었습니다. 다시 로그인해주세요.');
+          error.code = 'SOOP_AUTH';
+          throw error;
+        }
+      }
     });
 
     if (result && !result.TK) {

@@ -558,6 +558,7 @@ export class Chat {
 
     const entry = {
       id: crypto.randomUUID(),
+      scope: this.scope,
       account: this.client.info?.IS_LOGIN === 1 ? this.client.info.LOGIN_ID || '' : '',
       date: new Date().toISOString(),
       type,
@@ -754,13 +755,19 @@ export class Chat {
           ?? data.total_count
           ?? data.month
       ) || 0;
-    let message = `${gifts[event]} ${count}개`;
+    let message = count > 0 ? `${gifts[event]} ${count}개` : gifts[event];
 
     if (['follow', 'followEffect', 'subCeremony'].includes(event)) {
-      message = `${gifts[event]} ${data.month || 0}개월`;
+      const month = Number(data.month);
+      message = month > 0 ? `${gifts[event]} ${month}개월` : gifts[event];
     }
     else if (['quickview', 'subscription'].includes(event)) {
-      message = `${data.toNick || ''}님에게 ${gifts[event]}`;
+      const recipient = data.toNick || data.toId;
+      message = `${recipient ? `${recipient}님에게 ` : ''}${gifts[event]}`;
+    }
+    else if (event === 'ogqGift') {
+      const recipient = data.receivedName || data.receivedId;
+      message = `${recipient ? `${recipient}님에게 ` : ''}${gifts[event]}${data.title ? ` [${data.title}]` : ''}`;
     }
     else if (event === 'challenge' || event === 'battle') {
       message = `[${data.title || gifts[event]}] ${gifts[event]} ${count}개`;
@@ -769,7 +776,7 @@ export class Chat {
     this.add('gift', {
       ...data,
       category: ['challenge', 'battle'].includes(event) ? event : 'support',
-      userId: data.userId || data.user_id,
+      userId: data.userId || data.user_id || data.fromId,
       userNick: name,
       message
     });
@@ -935,6 +942,9 @@ export class Chat {
       }
 
       const account = this.client.info?.IS_LOGIN === 1 ? this.client.info.LOGIN_ID || '' : '';
+      if (!search && entry.scope && this.scope && entry.scope !== this.scope) {
+        return false;
+      }
       if (!search && Object.hasOwn(entry, 'account') && entry.account !== account) {
         return false;
       }
@@ -1004,6 +1014,18 @@ export class Chat {
     }
 
     const entries = [];
+    const recent = new Map();
+    const collect = entry => {
+      if (!entry.scope && ['chat', 'ogq', 'manager'].includes(entry.type)) {
+        const key = JSON.stringify([entry.account, entry.type, entry.user?.id, entry.message, entry.image, entry.ogq]);
+        const date = Date.parse(entry.date);
+        const previous = recent.get(key);
+        if (previous !== undefined && Math.abs(previous - date) <= 50) return;
+        recent.set(key, date);
+      }
+      this.subscription(entry);
+      entries.push(entry);
+    };
     const dates = fs.existsSync(this.directory)
       ? fs.readdirSync(this.directory).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date))
       : [];
@@ -1073,8 +1095,7 @@ export class Chat {
                   const entry = normalize(value, name, date, offset + index + 1);
 
                   if (matches(entry)) {
-                    this.subscription(entry);
-                    entries.push(entry);
+                    collect(entry);
                   }
                 } catch {}
               }
@@ -1097,8 +1118,7 @@ export class Chat {
               const entry = normalize(value, name, date, 0);
 
               if (matches(entry)) {
-                this.subscription(entry);
-                entries.push(entry);
+                collect(entry);
               }
             } catch {}
           }
