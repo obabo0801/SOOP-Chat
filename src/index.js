@@ -1385,7 +1385,6 @@ function shutdown() {
       await macro?.close();
       await client?.destroy();
     } catch {
-      log.error('[종료]', '연결 종료 실패');
       code = 1;
     }
 
@@ -1617,6 +1616,7 @@ async function edit(browser = true) {
     range: session?.range,
     password: getConfig('screenPw') ?? '',
     videoEnabled: getConfig('videoEnabled') !== false,
+    recordingEnabled: Boolean(getConfig('recordingEnabled')),
     accessPassword: getConfig('accessPw') === 'ACCESSPW' ? '' : getConfig('accessPw') ?? '',
     stop: session ? shutdown : undefined,
     host: getConfig('host') ?? '127.0.0.1',

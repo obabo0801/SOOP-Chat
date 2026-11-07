@@ -8,6 +8,8 @@ import * as tenants from '#soop/tenants';
 
 const connections = new WeakMap();
 const starting = new Set();
+const multiStartTimeout = 60000;
+const multiStartInterval = 500;
 
 function scope(client) {
   return client ? String(client.multiScope || process.pid) : process.env.MULTISCOPE || '';
@@ -72,8 +74,10 @@ export async function startMulti(count, client) {
     child.stdin.on('error', () => {});
 
     try {
-      for (let attempt = 0; attempt < 50; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+      const deadline = Date.now() + multiStartTimeout;
+
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, multiStartInterval));
 
         if (failed) {
           throw new Error('멀티 실행 실패');

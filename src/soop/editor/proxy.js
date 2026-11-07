@@ -35,14 +35,20 @@ export function proxyScreen(request, response, state) {
   }
 
   try {
-    const lock = path.join(os.tmpdir(), `soopeditor${port}.lock`);
-    const lease = JSON.parse(fs.readFileSync(fs.existsSync(lock) ? lock : screens.screenFile(port), 'utf8'));
-
-    if (lease.workspace !== process.cwd() || !Number.isInteger(lease.pid) || lease.pid <= 0) {
-      throw new Error('화면 없음');
+    const file = screens.screenFile(port);
+    if (fs.existsSync(file)) {
+      screens.screenSession(state, number);
     }
+    else {
+      const lock = path.join(os.tmpdir(), `soopeditor${port}.lock`);
+      const lease = JSON.parse(fs.readFileSync(lock, 'utf8'));
 
-    process.kill(lease.pid, 0);
+      if (lease.workspace !== process.cwd() || !Number.isInteger(lease.pid) || lease.pid <= 0) {
+        throw new Error('화면 없음');
+      }
+
+      process.kill(lease.pid, 0);
+    }
   } catch {
     reject(404, '화면이 종료되었습니다.');
 
@@ -76,7 +82,7 @@ export function proxyScreen(request, response, state) {
     incoming.once('error', () => reject(502, '화면 연결이 끊겼습니다.'));
     incoming.once('aborted', () => reject(502, '화면 연결이 끊겼습니다.'));
     const output = { ...incoming.headers };
-    if (/^\/\d+\/(?:media\/|api\/chat$)/.test(address.pathname) && request.headers.origin
+    if (/^\/\d+\/(?:media\/|api\/)/.test(address.pathname) && request.headers.origin
       && state.allowed.has(request.headers.origin)) {
       output['access-control-allow-origin'] = request.headers.origin;
     }

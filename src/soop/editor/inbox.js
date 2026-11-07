@@ -1,6 +1,7 @@
 import { DOMAIN } from '/config.js';
 import { drag } from './scroll.js';
 import * as chat from './chat.js';
+import * as identityModule from './identity.js';
 
 export function createInbox(request, profile) {
   const $ = id => document.getElementById(id);
@@ -171,13 +172,17 @@ export function createInbox(request, profile) {
         const emblem = data?.emblem;
         const grades = { silver: '실버', gold: '골드', platinum: '플래티넘', emerald: '에메랄드', diamond: '다이아', prestige: '프레스티지' };
         picture(emblem?.url, `${grades[emblem?.grade] || '엠블럼'}${String(emblem?.level || '').replace('lv', '')}`);
-        for (const [key, value] of Object.entries(data?.user || {})) {
+        const latest = identityModule.subscription(data?.user || {}, user);
+        for (const [key, value] of Object.entries(latest)) {
           if (value && (!user[key] || key === 'role' && user[key] === '일반')) user[key] = value;
+        }
+        for (const key of ['tier', 'month', 'total', 'tierUrl', 'tierName']) {
+          if (latest[key] !== undefined) user[key] = latest[key];
         }
         const detail = user;
         identity.dataset.role = detail.role || '';
-        picture(detail.tierUrl, `${detail.tierName || '구독'}${detail.month > 0
-          ? ` ${detail.month}개월 연속 구독 중` : detail.total > 0 ? ` 누적 ${detail.total}개월 구독 중` : ''}`);
+        picture(detail.tierUrl, `${detail.tierName || '구독'}${detail.total > 0
+          ? ` 누적 ${detail.total}개월` : ''}`);
         const badges = { 스트리머: 'B', 매니저: 'M', 열혈: '♥', 팬: 'F', 운영자: 'S' };
         if (badges[detail.role]) {
           const badge = document.createElement('span');

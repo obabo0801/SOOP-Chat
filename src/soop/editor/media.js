@@ -47,5 +47,11 @@ export function createMedia(state, server) {
     const number = Number(new URL(state.origin).port) - state.range.start + 1;
     return new URL(`/${number}/api/chat`, origin).href;
   };
-  return { get origin() { refresh(); return origin?.origin || ''; }, url, verify, data, chat };
+  const api = home => {
+    refresh();
+    if (!origin) return '';
+    const number = Number(new URL(state.origin).port) - state.range.start + 1;
+    return new URL(home ? '/' : `/${number}/`, origin).href;
+  };
+  return { get origin() { refresh(); return origin?.origin || ''; }, url, verify, data, chat, api };
 }

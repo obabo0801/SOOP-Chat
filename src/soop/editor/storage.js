@@ -2,18 +2,18 @@ import fs from 'fs';
 import path from 'path';
 
 const folder = () => path.join(process.cwd(), 'sessions');
-const file = number => path.join(folder(), `${number || 'root'}.json`);
+const file = number => path.join(folder(), `${number}.json`);
 
 export function upStatus(account, bjId, done = false) {
   if (!account || !bjId) return null;
-  const target = path.join(folder(), 'up.json');
+  const target = path.join(process.cwd(), 'cache', 'up.json');
   let records = {};
   try { records = JSON.parse(fs.readFileSync(target, 'utf8')); } catch {}
   const now = Date.now();
   const key = `${account}:${bjId}`;
   if (done) {
     records[key] = now;
-    fs.mkdirSync(folder(), { recursive: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
     const temporary = `${target}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(records), { mode: 0o600 });
     fs.renameSync(temporary, target);
@@ -21,7 +21,7 @@ export function upStatus(account, bjId, done = false) {
   return typeof records[key] === 'number' ? now - records[key] < 86400000 : null;
 }
 
-export function readStored(number = 0) {
+export function readStored(number = 1) {
   try {
     const value = JSON.parse(fs.readFileSync(file(number), 'utf8'));
     return value?.settings && value?.editor ? value : null;
@@ -29,7 +29,7 @@ export function readStored(number = 0) {
 }
 
 export function saveStored(value) {
-  const number = value.editor.root ? 0 : value.editor.port - value.editor.range.start + 1;
+  const number = value.editor.port - value.editor.range.start + 1;
   fs.mkdirSync(folder(), { recursive: true });
   const target = file(number);
   const temporary = `${target}.${process.pid}.tmp`;

@@ -5,8 +5,11 @@ import { settingsFile } from './settings.js';
 import { useEnabled } from './editor/usage.js';
 import { SoopHistory } from '#soop/history';
 import { checkFlag } from '#soop/handler';
-import * as control from '#soop/control';
 import * as weflab from '#utils/weflab';
+
+const controlModule = new URL('./control.js', import.meta.url);
+controlModule.search = new URL(import.meta.url).search;
+const control = await import(controlModule.href);
 
 const EVENTS = {
   balloon: '별풍선',

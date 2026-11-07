@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import * as mpegts from './editor/mpegts.js';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -90,6 +91,7 @@ export function createVideo(provider, options = {}) {
   let state = 'loading';
   let message = '';
   let next = 0;
+  let sourceTask;
   let timer;
   let job;
   let closed = false;
@@ -165,6 +167,9 @@ export function createVideo(provider, options = {}) {
     const id = stream.index++;
     const directory = await folder;
     const file = path.join(directory, `${stream.key}-${id}`);
+
+    await fs.mkdir(directory, { recursive: true });
+
     const space = await fs.statfs(directory);
 
     if (space.bavail * space.bsize < 67108864) {
@@ -212,7 +217,7 @@ export function createVideo(provider, options = {}) {
     const date = previous && !stream.discontinuity
       ? previous.date + previous.duration * 1000 : Date.now() - segment.duration * 1000;
     const url = await write(stream, { content: segment.content, type: 'video/mp2t' });
-    const content = [`#EXT-X-PROGRAM-DATE-TIME:${new Date(date).toISOString()}`, `#EXTINF:${segment.duration},`];
+    const content = ['#EXT-X-KEY:METHOD=NONE', `#EXT-X-PROGRAM-DATE-TIME:${new Date(date).toISOString()}`, `#EXTINF:${segment.duration},`];
 
     if (stream.discontinuity) {
       content.unshift('#EXT-X-DISCONTINUITY');
@@ -223,6 +228,7 @@ export function createVideo(provider, options = {}) {
       sequence: stream.segments.length,
       duration: segment.duration,
       date,
+      quality: stream.source.quality,
       content,
       url
     });
@@ -261,7 +267,8 @@ export function createVideo(provider, options = {}) {
     let date = Date.now() - items.reduce((sum, item) => sum + item.duration * 1000, 0);
 
     for (const item of items) {
-      const previous = stream.segments.find(segment => segment.sequence === item.sequence);
+      const previous = stream.segments.find(segment => segment.sequence === item.sequence
+        && segment.quality === stream.source.quality);
 
       item.date = Number.isFinite(item.date) ? item.date : previous?.date ?? date;
       date = item.date + item.duration * 1000;
@@ -275,7 +282,14 @@ export function createVideo(provider, options = {}) {
       stream.seen.clear();
     }
 
-    const pending = items.filter(item => !stream.seen.has(item.sequence));
+    const end = last ? last.date + last.duration * 1000 : 0;
+    if (stream.switching) {
+      for (const item of items) {
+        if (item.date + item.duration * 1000 <= end + 250) stream.seen.add(item.sequence);
+      }
+    }
+    const pending = items.filter(item => !stream.seen.has(item.sequence)
+      && (!stream.switching || item.date + item.duration * 1000 > end + 250));
     const previous = stream.segments.length;
 
     for (let index = 0; index < pending.length; index += 3) {
@@ -299,7 +313,7 @@ export function createVideo(provider, options = {}) {
 
           const local = await save(stream, item.url);
 
-          return { ...item, content, url: local };
+          return { ...item, content, url: local, quality: stream.source.quality };
         })
       );
 
@@ -312,10 +326,12 @@ export function createVideo(provider, options = {}) {
         const previous = stream.segments.at(-1);
         const gap = previous && previous.sequence + 1 !== item.sequence;
 
-        if (gap && !item.content.includes('#EXT-X-DISCONTINUITY')) {
+        if ((gap || stream.discontinuity) && !item.content.includes('#EXT-X-DISCONTINUITY')) {
           item.content.unshift('#EXT-X-DISCONTINUITY');
         }
 
+        stream.discontinuity = false;
+        stream.switching = false;
         stream.segments.push(item);
         stream.seen.add(item.sequence);
       }
@@ -358,66 +374,93 @@ export function createVideo(provider, options = {}) {
       }
 
       if (!active || Date.now() >= next || active.source.quality !== quality) {
-        const source = await provider(quality, signal);
-
-        if (current !== generation) {
-          return;
+        if (!sourceTask || sourceTask.generation !== current || sourceTask.quality !== quality) {
+          const task = { generation: current, quality, ready: false };
+          sourceTask = task;
+          task.promise = Promise.resolve().then(() => provider(task.quality, signal)).then(
+            source => { task.source = source; task.ready = true; },
+            error => { task.error = error; task.ready = true; }
+          );
         }
+        const task = sourceTask;
+        if (!active) await task.promise;
 
-        next = Date.now() + 15000;
+        if (task.ready) {
+          sourceTask = null;
 
-        if (closed) {
-          return;
-        }
-
-        if (!source) {
-          if (active) {
-            active.transport?.close();
-            active.transport = null;
-            active.ended = true;
+          if (current !== generation) {
+            return;
           }
 
-          recorded = active || recorded;
-          active = null;
-          state = 'offline';
-          message = '오프라인';
+          next = Date.now() + 15000;
 
-          return;
+          if (closed) {
+            return;
+          }
+
+          if (task.error) {
+            if (!active || task.error.code === 'SOOP_STREAM') throw task.error;
+          }
+          else {
+            const source = task.source;
+            if (!source) {
+              if (active) {
+                active.transport?.close();
+                active.transport = null;
+                active.ended = true;
+              }
+
+              recorded = active || recorded;
+              active = null;
+              state = 'offline';
+              message = '오프라인';
+
+              return;
+            }
+
+            qualities = source.qualities || [];
+            quality = source.quality;
+
+            const identity = `${source.bjId}/${source.broadNo}`;
+            let stream = streams.get(identity);
+
+            if (!stream) {
+              stream = {
+                key: crypto.randomBytes(24).toString('hex'),
+                source,
+                index: 1,
+                files: new Map(),
+                paths: new Map(),
+                segments: [],
+                seen: new Set(),
+                duration: 0,
+                ended: false
+              };
+              streams.set(identity, stream);
+            }
+
+            if (active && active !== stream) {
+              active.transport?.close();
+              active.transport = null;
+            }
+
+            if (stream.source.quality !== source.quality) {
+              stream.transport?.close();
+              stream.transport = null;
+              stream.seen.clear();
+              stream.discontinuity = true;
+              stream.switching = true;
+            }
+
+            if (recorded && recorded.source.bjId !== source.bjId) {
+              recorded = null;
+            }
+
+            stream.source = source;
+            stream.ended = false;
+            active = stream;
+          }
         }
-
-        qualities = source.qualities || [];
-        quality = source.quality;
-
-        const identity = `${source.bjId}/${source.broadNo}/${source.quality}`;
-        let stream = streams.get(identity);
-
-        if (!stream) {
-          stream = {
-            key: crypto.randomBytes(24).toString('hex'),
-            source,
-            index: 1,
-            files: new Map(),
-            paths: new Map(),
-            segments: [],
-            seen: new Set(),
-            duration: 0,
-            ended: false
-          };
-          streams.set(identity, stream);
-        }
-
-        if (active && active !== stream) {
-          active.transport?.close();
-          active.transport = null;
-        }
-
-        if (recorded && recorded.source.bjId !== source.bjId) {
-          recorded = null;
-        }
-
-        stream.source = source;
-        stream.ended = false;
-        active = stream;
       }
 
       const stream = active;
@@ -474,7 +517,7 @@ export function createVideo(provider, options = {}) {
       job = null;
 
       if (!closed && !paused) {
-        const delay = state === 'live' ? 1500 : 5000;
+        const delay = state === 'live' ? (active?.source.native ? 0 : 1500) : 5000;
 
         timer = setTimeout(() => void run(), delay);
         timer.unref();
@@ -594,10 +637,10 @@ export function createVideo(provider, options = {}) {
     });
 
     async function* chunks() {
-      yield first;
-
-      for (const file of files.slice(1)) {
-        yield await fs.readFile(file.file);
+      const clock = mpegts.createClock();
+      for (let index = 0; index < files.length; index++) {
+        const content = index === 0 ? first : await fs.readFile(files[index].file);
+        yield clock(content, segments[index].duration);
       }
     }
 
@@ -706,12 +749,19 @@ export function createVideo(provider, options = {}) {
     available = true;
     checked = 0;
     next = 0;
+    sourceTask = null;
     state = 'loading';
     message = '';
     await job?.catch(() => {});
 
     const directory = await folder;
-    const files = await fs.readdir(directory);
+    const files = await fs.readdir(directory).catch(error => {
+      if (error.code === 'ENOENT') {
+        return [];
+      }
+
+      throw error;
+    });
 
     await Promise.all(files.map(file => fs.rm(path.join(directory, file), { force: true })));
   };

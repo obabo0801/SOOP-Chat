@@ -17,8 +17,8 @@ export function createPip(video, subtitle, title, update, caption, playing = () 
   const changed = () => update(active());
   const guard = () => { settling = Date.now() + 1200; };
   const resume = () => {
-    if (mobile && playing() && (!document.hidden || active())
-      && video.paused && video.readyState >= 2) {
+    if (mobile && playing() && !document.hidden
+      && !video.ended && video.paused && video.readyState >= 2) {
       void video.play().catch(() => {});
     }
   };
@@ -184,7 +184,10 @@ export function createPip(video, subtitle, title, update, caption, playing = () 
     },
     async toggle() {
       if (!opening) {
-        opening = this.change().finally(() => { opening = null; });
+        opening = this.change().catch(error => {
+          settling = 0;
+          throw error;
+        }).finally(() => { opening = null; });
       }
       return opening;
     },
@@ -247,7 +250,7 @@ export function createPip(video, subtitle, title, update, caption, playing = () 
 
       popup = target;
       view.title = title();
-      view.body.className = 'pip-window';
+      view.documentElement.className = 'pip-window';
       link.rel = 'stylesheet';
       link.href = new URL('./style.css', window.location.href).href;
       view.head.append(link);

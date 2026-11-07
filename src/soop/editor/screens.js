@@ -15,7 +15,9 @@ export function screenSession(state, number) {
   const port = state.range.start + number - 1;
   const data = JSON.parse(fs.readFileSync(screenFile(port), 'utf8'));
   if (data.port !== port || data.workspace !== process.cwd()
-    || !Number.isInteger(data.pid) || data.pid <= 0 || !/^[a-f0-9]{64}$/.test(data.token)) {
+    || !Number.isInteger(data.pid) || data.pid <= 0 || !/^[a-f0-9]{64}$/.test(data.token)
+    || !Number.isSafeInteger(data.updated) || Date.now() - data.updated > 30000
+    || data.updated > Date.now() + 5000) {
     throw new Error('연결을 확인할 수 없습니다.');
   }
   process.kill(data.pid, 0);
@@ -33,6 +35,7 @@ export function createScreens(state) {
   let login;
   let streamer;
   let streamLoading;
+  let subscription;
   const identity = client => {
     const cookie = api.cookieString(client.cookie);
     if (cookie !== credentials) {
@@ -51,6 +54,22 @@ export function createScreens(state) {
     }
     const info = client.info || login;
     const id = info?.IS_LOGIN === 1 ? info.LOGIN_ID : '';
+    const subscriptionKey = `${id}:${client.bjId}:${cookie}`;
+    if (subscription?.key !== subscriptionKey) subscription = { key: subscriptionKey, until: 0 };
+    if (id && client.bjId && cookie && Date.now() >= subscription.until && !subscription.pending) {
+      const current = subscription;
+      current.until = Date.now() + 60000;
+      current.pending = api.getSubscription(client.bjId, id, {
+        ...client.network?.httpOptions, cookie: client.cookie, signal: AbortSignal.timeout(10000)
+      }).then(value => {
+        if (subscription !== current) return;
+        current.value = value;
+        const saved = state.screenIdentity;
+        state.chat.extend({ ...(saved?.id === id && saved.bjId === client.bjId ? saved.user : {}), ...value, id });
+      }).catch(() => {
+        current.until = Date.now() + 15000;
+      }).finally(() => { current.pending = null; });
+    }
     if (id && account?.id !== id && loading !== id) {
       loading = id;
       void Promise.allSettled([api.getStation(id), api.getStatus(id)]).then(([station, status]) => {
@@ -65,8 +84,6 @@ export function createScreens(state) {
     }
     const user = state.chat.user({ userId: client.userId || id,
       userFlag: state.chat.flag || client.userFlag });
-    const months = Number(user.total || user.month || 0);
-    user.tierUrl = user.tier && months > 0 ? client.makeTierUrl?.(user.tier, months) || '' : '';
     const saved = state.screenIdentity;
     if (!saved || saved.id !== id || saved.bjId !== client.bjId || client.isOpen?.()) {
       let display = user;
@@ -80,8 +97,12 @@ export function createScreens(state) {
       }
       state.screenIdentity = { id, bjId: client.bjId, user: display };
     }
-    const display = client.isOpen?.() ? user : state.screenIdentity.user;
-    return { ...display, id, image: account?.id === id ? account.image : '',
+    const display = { ...(client.isOpen?.() ? user : state.screenIdentity.user), ...subscription.value };
+    state.screenIdentity.user = display;
+    const month = Number(display.total || display.month || 0);
+    const tierUrl = display.tier && month > 0
+      ? subscription.value?.tierUrl || client.makeTierUrl?.(display.tier, month) || display.tierUrl || '' : '';
+    return { ...display, tierUrl, id, image: account?.id === id ? account.image : '',
       emblem: account?.id === id ? account.emblem : '',
       emblemGrade: account?.id === id ? account.emblemGrade : '',
       emblemLevel: account?.id === id ? account.emblemLevel : '',
@@ -93,6 +114,7 @@ export function createScreens(state) {
     const recovery = {
       settings: { bjId: client.bjId || '', broadPw: client.broadPw || '', auto: client.auto,
         videoEnabled: state.videoEnabled !== false,
+        recordingEnabled: Boolean(state.recordingEnabled),
         scheduled: client.scheduled || 0,
         cookie: client.cookie || '', info: client.info || null, screenPw: state.password },
       editor: { port, range: state.range, token: state.token, accessToken: state.accessToken,
@@ -129,7 +151,7 @@ export function createScreens(state) {
     const preview = number > 0 && client.isOpen?.()
       ? new URL(`/m/${number}`, DOMAIN.thumbnail).href : '';
     const data = {
-      port, pid: process.pid, workspace: process.cwd(), token: state.token,
+      port, pid: process.pid, workspace: process.cwd(), token: state.token, updated: Date.now(),
       id: client.bjId || '',
       name: name || '',
       ready,
@@ -187,16 +209,14 @@ export function createScreens(state) {
 
       for (let next = start; next < start + count; next++) {
         try {
-          const data = JSON.parse(fs.readFileSync(screenFile(next), 'utf8'));
+          const number = next - start + 1;
+          const data = screenSession(state, number);
 
-          if (!data.ready || !data.id || data.port !== next || data.workspace !== process.cwd()
-            || !Number.isInteger(data.pid) || data.pid <= 0 || !/^[a-f0-9]{64}$/.test(data.token)) {
+          if (!data.ready || !data.id) {
             continue;
           }
 
-          process.kill(data.pid, 0);
           const current = next === port;
-          const number = next - start + 1;
           const url = `/${number}/`;
 
           items.push({ number, id: data.id, name: data.name, title: data.title,
@@ -215,7 +235,7 @@ export function createScreens(state) {
       clearInterval(timer);
       process.off('exit', remove);
       remove();
-      if (state.stopRequested) removeStored(state.root ? 0 : port - state.range.start + 1);
+      if (state.stopRequested) removeStored(port - state.range.start + 1);
     }
   };
 }

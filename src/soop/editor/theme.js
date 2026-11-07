@@ -12,9 +12,9 @@ export function createTheme(select) {
   const update = () => {
     const dark = select.value === 'dark'
       || select.value === 'system' && media.matches
-      || document.body.classList.contains('theater');
+      || document.documentElement.classList.contains('theater');
 
-    document.body.classList.toggle('dark', dark);
+    document.documentElement.classList.toggle('dark', dark);
     window.dispatchEvent(new Event('theme'));
   };
 

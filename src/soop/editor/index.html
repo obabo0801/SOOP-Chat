@@ -14,8 +14,8 @@
     <link rel="stylesheet" href="/chat.css" />
     <script type="module" src="/index.js"></script>
   </head>
-  <body class="loading">
-    <progress id="loading" title="화면을 불러오는 중입니다."></progress>
+  <body>
+    <progress id="loading"></progress>
     <header id="header" hidden>
       <a id="home-open" href="/" title="홈">
         <img id="home-logo" alt="SOOP" />
@@ -103,6 +103,8 @@
             </button>
             <label class="switch">매크로 사용<input id="menu-enabled" type="checkbox" /></label>
             <label class="switch">알림 사용<input id="menu-notify" type="checkbox" /></label>
+            <label class="switch">자동 연결<input id="menu-auto" type="checkbox" /></label>
+            <label class="switch">자동 녹화<input id="menu-recording" type="checkbox" /></label>
           </div>
         </div>
       </div>
@@ -487,6 +489,10 @@
       <div id="members-list" tabindex="0"></div>
     </dialog>
     <div id="screen" hidden>
+      <div id="account-status" hidden>
+        <span id="account-message"></span>
+        <button id="account-signin" type="button">다시 로그인</button>
+      </div>
       <div id="video-slot" hidden>
       <div class="player" id="player" tabindex="0">
         <video id="video" autoplay playsinline muted crossorigin="anonymous"></video>
@@ -744,7 +750,7 @@
                   d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m1 3a5 5 0 0 1 4 5"
                 />
               </svg>
-              <span id="members-count">0</span>
+              <span id="members-count" hidden></span>
             </button>
             <span class="broadcast-separator">·</span>
             <span id="video-duration"></span>
@@ -1022,6 +1028,7 @@
       </div>
       <div class="chat-setting-menu">
         <button id="chat-display-open" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M8 14a4 4 0 0 0 8 0M8 9h.01M16 9h.01" /></svg>이모티콘</button>
+        <button id="chat-cheer-open" type="button"><svg viewBox="0 0 24 24"><path d="m13 3 8 8-5 5-8-8zM10 10 3 17l4 4 7-7M18 2v3M22 6h-3M6 3l2 2" /></svg>응원봉</button>
         <button id="chat-nickname-open" type="button"><svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="3" /><path d="M3 20v-2a6 6 0 0 1 9-5M15 20l-3 1 1-3 6-6 2 2z" /></svg>닉네임 변경</button>
         <button id="chat-entry-open" type="button"><svg viewBox="0 0 24 24"><path d="M14 3h6v18h-6M3 12h12m-4-4 4 4-4 4" /></svg>입장 표시</button>
         <button id="chat-receive-open" type="button"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3" /><path d="m3 7 9 6 9-6" /></svg>귓속말 수신</button>
@@ -1031,6 +1038,41 @@
         <button id="chat-size-open" type="button"><svg viewBox="0 0 24 24"><path d="M4 5h12M10 5v15M16 11h6M19 11v9" /></svg>채팅 크기</button>
         <button id="chat-multi-open" type="button"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2" /><path d="M8 16v5h13V8h-5" /></svg>멀티 모드</button>
       </div>
+    </dialog>
+    <dialog id="chat-cheer" class="chat-option">
+      <div class="heading">
+        <h2>응원봉</h2>
+        <button id="chat-cheer-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <p id="cheer-scope" class="cheer-scope"></p>
+      <form id="cheer-form">
+        <div class="cheer-grid">
+          <label>전송 방식<select id="cheer-mode"><option value="single">단일 반복</option><option value="pattern">패턴</option></select></label>
+          <label id="cheer-order-field" hidden>전송 순서<select id="cheer-order"><option value="sequence">순환</option><option value="shuffle">셔플</option></select></label>
+        </div>
+        <div class="cheer-label"><label id="cheer-text-label" for="cheer-text">응원 문구</label><button id="cheer-import" type="button">입력 가져오기</button></div>
+        <textarea id="cheer-text" rows="3" maxlength="12000" placeholder="응원 문구 또는 /야광봉/"></textarea>
+        <div id="cheer-preview" class="cheer-preview" aria-label="미리보기"></div>
+        <div class="cheer-grid">
+          <label>전송 간격<select id="cheer-interval"><option value="1">1초</option><option value="1.5">1.5초</option><option value="2" selected>2초</option><option value="3">3초</option><option value="5">5초</option><option value="10">10초</option><option value="30">30초</option><option value="60">60초</option></select></label>
+          <label>자동 종료<select id="cheer-duration"><option value="0">사용 안 함</option><option value="60">1분</option><option value="180" selected>3분</option><option value="300">5분</option><option value="600">10분</option><option value="1800">30분</option><option value="3600">1시간</option></select></label>
+        </div>
+        <details class="cheer-options">
+          <summary>세부 설정</summary>
+          <div class="cheer-grid">
+            <label>시간 오차<select id="cheer-variance"><option value="0">사용 안 함</option><option value="0.2">±0.2초</option><option value="0.5">±0.5초</option><option value="1">±1초</option></select></label>
+            <label>개수 오차<select id="cheer-countVariance"><option value="0">사용 안 함</option><option value="1">±1개</option><option value="2">±2개</option><option value="3">±3개</option></select></label>
+          </div>
+        </details>
+        <p id="cheer-status" role="status">정지됨</p>
+        <div class="cheer-actions"><button id="cheer-save" type="submit">저장</button><button id="cheer-start" type="button">시작</button><button id="cheer-stop" type="button" disabled>정지</button></div>
+      </form>
+    </dialog>
+    <dialog id="chat-cheer-error" class="chat-option">
+      <div class="heading"><h2>응원봉</h2><button id="cheer-error-close" class="close" type="button" title="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div>
+      <p id="cheer-error-message"></p>
     </dialog>
     <dialog id="chat-display" class="chat-option">
       <div class="heading">
@@ -1207,6 +1249,20 @@
         <div id="chat-ogq-list"></div>
       </div>
     </dialog>
+    <dialog id="chat-bans">
+      <div class="heading">
+        <h2>제재내역</h2>
+        <button id="chat-bans-close" class="close" type="button" title="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <p id="chat-bans-name"></p>
+      <p id="chat-bans-summary"></p>
+      <div id="chat-bans-list"></div>
+      <p id="chat-bans-status" role="status"></p>
+      <button id="chat-bans-more" type="button" hidden>더 보기</button>
+      <a id="chat-bans-source" target="_blank" rel="noopener noreferrer">위플뷰에서 보기</a>
+    </dialog>
     <dialog id="chat-history">
       <div class="heading">
         <div class="chat-history-heading">
@@ -1231,6 +1287,7 @@
               <path d="M12 11v6M12 7h.01" />
             </svg>
           </button>
+          <span id="chat-history-count" title="이번 달 채팅 수" hidden></span>
         </div>
         <button id="chat-history-close" class="close" type="button" title="닫기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
