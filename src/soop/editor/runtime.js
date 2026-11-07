@@ -8,7 +8,7 @@ import { readStored } from './storage.js';
 export function readRecovery(session) {
   const stored = () => {
     if (session && !session.restore) return null;
-    const value = readStored(session ? session.port - session.range.start + 1 : 0);
+    const value = readStored(session ? session.port - session.range.start + 1 : 1);
     return value ? { ...value, stored: true, editor: session
       ? { ...value.editor, port: session.port, range: session.range } : value.editor } : null;
   };

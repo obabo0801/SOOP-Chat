@@ -8,6 +8,7 @@ import * as http from '#soop/http';
 import * as ntfy from '#utils/ntfy';
 import * as log from '#utils/log';
 import * as push from './editor/push.js';
+import * as errors from './errors.js';
 
 const PACKETS = new Set([
   SVC.CHAT,
@@ -119,6 +120,7 @@ export function images(value, photos = []) {
     try {
       const url = new URL(String(source).replace(/&amp;/g, '&'), 'https://www.sooplive.com');
       if (url.protocol === 'http:') url.protocol = 'https:';
+      if (url.hostname === 'ogq-sticker-global-cdn-z01.sooplive.com') url.pathname = url.pathname.replace(/\/{2,}/g, '/');
       if (url.protocol === 'https:' && !url.username && !url.password) result.push(url.href);
     } catch {}
   }
@@ -535,9 +537,13 @@ export class SoopNotify {
         const type = data.contentType || 'post';
         if (!['post', 'clip', 'catch'].includes(type)) return;
         const kind = data.parentCommentNo ? '답글' : '댓글';
+        const pictures = images(data.message, data.photo?.url ? [data.photo.url] : data.photos || []);
+        const emoticons = this.client.findEmoticon?.(preview(data.message)) || [];
         this.send(`${type}${event === 'delete' ? 'Delete' : event === 'update' ? 'Edit' : 'Create'}`,
           [data.title || '제목 없음', preview(data.message)].filter(Boolean).join('\n'), 1000,
-          `${CONTENTS[type]} ${kind} ${action}`, data.url, undefined, data);
+          `${CONTENTS[type]} ${kind} ${action}`, data.url, undefined,
+          { ...data, imageUrl: pictures[0] || emoticons[0]?.url, images: pictures, emoticons,
+            stickers: stickers([data.message, ...pictures].join('\n')) });
       });
     }
 
@@ -624,7 +630,8 @@ export class SoopNotify {
 
       this.send('disconnect', `${name} 연결이 끊겼습니다.`, 10000);
     });
-    this.on('error', () => {
+    this.on('error', error => {
+      if (errors.transient(error)) return;
       const message =
         '연결 또는 요청 처리 오류가 발생했습니다. 자세한 내용은 콘솔을 확인하세요.';
 

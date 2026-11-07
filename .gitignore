@@ -155,3 +155,6 @@ vite.config.ts.timestamp-*
 /update.bat
 /private.log
 /sessions/
+/cache/
+/videos/
+/src/soop/editor/android.apk

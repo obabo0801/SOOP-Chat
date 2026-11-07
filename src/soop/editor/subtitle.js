@@ -41,12 +41,14 @@ export function createSubtitle(video, node, enabled, live = () => false) {
       track.removeCue(cue);
     }
 
+    for (const entry of entries) {
+      entry.time = entry.source === source && Number.isFinite(entry.position)
+        ? entry.position : position(entry.date) - (entry.delay ?? delay);
+    }
     for (let index = 0; index < entries.length; index++) {
       const entry = entries[index];
-
-      entry.time = position(entry.date) - (entry.delay ?? delay);
       const next = entries[index + 1];
-      const end = Math.min(entry.time + 6, next ? position(next.date) - (next.delay ?? delay) : Infinity);
+      const end = Math.min(entry.time + 6, next?.time ?? Infinity);
 
       if (Number.isFinite(entry.time) && end > Math.max(0, entry.time)
         && typeof window.VTTCue === 'function') {
@@ -79,17 +81,21 @@ export function createSubtitle(video, node, enabled, live = () => false) {
 
       const current = position(time);
       let offset = realtime ? delay : undefined;
-      const age = Date.now() - time;
+      let anchor;
       const native = document.pictureInPictureElement === video
         || video.webkitPresentationMode === 'picture-in-picture';
-      if (realtime && live() && (!document.hidden || native) && Math.abs(age) <= 3000
-        && video.readyState >= 3 && !video.paused && !video.seeking && Number.isFinite(current)) {
-        delay = current - video.currentTime;
-        offset = delay;
+      if (realtime && live() && (!document.hidden || native)
+        && video.readyState >= 2 && !video.paused && !video.seeking) {
+        anchor = video.currentTime;
+        if (Number.isFinite(current)) {
+          delay = current - anchor;
+          offset = delay;
+        }
       }
 
       if (entry.id) seen.add(entry.id);
-      entries.push({ id: entry.id, date: time, delay: offset, message: entry.message });
+      entries.push({ id: entry.id, date: time, delay: offset, message: entry.message,
+        source: anchor === undefined ? undefined : source, position: anchor });
       entries.sort((a, b) => a.date - b.date);
 
       if (entries.length > 2000) {

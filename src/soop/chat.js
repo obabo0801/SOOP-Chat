@@ -1,10 +1,12 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import * as readline from 'readline';
 import { checkFlag, userInfo, SUBTITLE_LANG } from '#soop/handler';
 import { USER_FLAG1 } from '#soop/config';
 import * as time from '#utils/time';
 import * as notify from './notify.js';
+import * as errors from './errors.js';
 
 const gifts = {
   balloon: '별풍선',
@@ -38,7 +40,7 @@ export class Chat {
     this.settlement = null;
     this.flag = null;
     this.broadNo = client.isOpen?.() ? Number(client.channel?.BNO || 0) : 0;
-    this.since = this.broadNo ? Date.now() - 1 : 0;
+    this.since = 0;
     this.slow = 0;
     this.frozen = Boolean(client.iceMode);
     this.ice = { auth: [true, false, false, false, false, true], count: 1, date: 1 };
@@ -78,9 +80,6 @@ export class Chat {
     }
     this.on('subtitle', data => this.add('subtitle', data));
     this.on('system', data => this.add('system', { message: data.message || data }));
-    this.on('error', error => {
-      this.add('error', { message: error?.message || String(error) });
-    });
     this.on('macro', data => {
       if (['send', 'edit'].includes(data.type)) {
         this.add('macro', {
@@ -105,27 +104,7 @@ export class Chat {
         this.system(data.message || messages[data.code]);
       }
     });
-    this.on('join', () => {
-      const number = Number(this.client.channel?.BNO || 0);
-      if (number && number !== this.broadNo) {
-        this.broadNo = number;
-        this.since = Date.now() - 1;
-      }
-      this.settlement = null;
-      this.flag = null;
-      this.slow = 0;
-      this.frozen = false;
-      this.users.clear();
-      this.kicked.clear();
-      this.system('방송에 연결되었습니다.');
-      this.broadcast('state', this.state());
-      void this.kicks().catch(() => {});
-    });
-    this.on('close', () => {
-      this.poll = null;
-      this.system('방송 연결이 종료되었습니다.');
-      this.broadcast('state', this.state());
-    });
+    this.watchEvents();
     this.on('rule', () => this.broadcast('state', this.state()));
     this.on('viewer', () => this.broadcast('state', this.state()));
     this.on('notice', data => {
@@ -274,63 +253,6 @@ export class Chat {
         });
       });
     }
-    this.on('iceMode', data => {
-      const frozen = data.index !== 0;
-      const count = data.count > 0 ? data.count : this.ice.count;
-      const date = data.date > 0 ? data.date : this.ice.date;
-      let auth = this.ice.auth;
-
-      if (data.auth) {
-        auth = [
-          data.auth.isStreamerAllowed,
-          data.auth.isFanClubAllowed,
-          data.auth.isSupporterAllowed,
-          data.auth.isTopFanAllowed,
-          data.auth.isSubscriberAllowed,
-          data.auth.isManagerAllowed
-        ];
-      }
-
-      const grades = auth.some((value, index) => value !== this.ice.auth[index]);
-      const details = count !== this.ice.count || date !== this.ice.date;
-      let heading = '채팅창을 얼렸습니다.';
-      let message = '채팅에 참여 하실 수 있습니다.';
-
-      if (!frozen) {
-        heading = '채팅창을 녹였습니다.';
-      }
-      else {
-        if (this.frozen && grades && details) {
-          heading = '채팅 참여 등급, 등급 상세설정이 변경되었습니다.';
-        }
-        else if (this.frozen && grades) {
-          heading = '채팅 참여 등급이 변경되었습니다.';
-        }
-        else if (this.frozen && details) {
-          heading = '등급 상세설정이 변경되었습니다.';
-        }
-
-        const names = [
-          [0, '스트리머'],
-          [5, '매니저'],
-          [3, '열혈팬'],
-          [4, `구독팬(${date}개월↑)`],
-          [1, `팬클럽(${count}개↑)`],
-          [2, '서포터']
-        ];
-        const allowed = names.filter(([index]) => auth[index]).map(([, name]) => name);
-
-        message = `${allowed.join(', ')}만 채팅에 참여할 수 있습니다.`;
-      }
-
-      this.frozen = frozen;
-      this.ice.auth = auth;
-      this.ice.count = count;
-      this.ice.date = date;
-
-      this.add('system', { heading, message, tone: 'ice' });
-      this.broadcast('state', this.state());
-    });
     this.on('slowMode', data => {
       this.slow = data.count;
 
@@ -418,6 +340,127 @@ export class Chat {
     this.watchViewer();
   }
 
+  iceMode(data) {
+    const frozen = data.index !== 0;
+    const count = data.count > 0 ? data.count : this.ice.count;
+    const date = data.date > 0 ? data.date : this.ice.date;
+    let auth = frozen ? this.ice.auth : [true, false, false, false, false, true];
+
+    if (frozen && data.auth) {
+      auth = [
+        data.auth.isStreamerAllowed,
+        data.auth.isFanClubAllowed,
+        data.auth.isSupporterAllowed,
+        data.auth.isTopFanAllowed,
+        data.auth.isSubscriberAllowed,
+        data.auth.isManagerAllowed
+      ];
+    }
+
+    const grades = auth.some((value, index) => value !== this.ice.auth[index]);
+    const details = count !== this.ice.count || date !== this.ice.date;
+    let heading = '채팅창을 얼렸습니다.';
+    let message = '채팅에 참여 하실 수 있습니다.';
+
+    if (!frozen) {
+      heading = '채팅창을 녹였습니다.';
+    }
+    else {
+      if (this.frozen && grades && details) {
+        heading = '채팅 참여 등급, 등급 상세설정이 변경되었습니다.';
+      }
+      else if (this.frozen && grades) {
+        heading = '채팅 참여 등급이 변경되었습니다.';
+      }
+      else if (this.frozen && details) {
+        heading = '등급 상세설정이 변경되었습니다.';
+      }
+
+      const names = [
+        [0, '스트리머'],
+        [5, '매니저'],
+        [3, '열혈팬'],
+        [4, `구독팬(${date}개월↑)`],
+        [1, `팬클럽(${count}개↑)`],
+        [2, '서포터']
+      ];
+      const allowed = names.filter(([index]) => auth[index]).map(([, name]) => name);
+
+      message = `${allowed.join(', ')}만 채팅에 참여할 수 있습니다.`;
+    }
+
+    this.frozen = frozen;
+    this.ice.auth = auth;
+    this.ice.count = count;
+    this.ice.date = date;
+
+    this.add('system', { heading, message, tone: 'ice' });
+    this.broadcast('state', this.state());
+  }
+
+  watchEvents() {
+    this.watchHistory();
+    if (this.closed) return;
+    const disconnected = this.events.get('close');
+    if (disconnected) this.client.off('close', disconnected);
+    this.on('close', data => this.disconnected(data));
+    const failure = this.events.get('error');
+    if (failure) this.client.off('error', failure);
+    this.on('error', error => this.add('error', {
+      message: error?.message || String(error), silent: errors.transient(error)
+    }));
+    const previous = this.events.get('iceMode');
+    if (previous) this.client.off('iceMode', previous);
+    this.on('iceMode', data => this.iceMode(data));
+    if (!this.membersHandler) {
+      this.membersHandler = () => this.broadcast('state', this.state());
+      this.on('userList', this.membersHandler);
+    }
+    if (!this.endingHandler) {
+      this.endingHandler = (data = {}) => {
+        const key = `${data.bjId || this.client.bjId}:${data.broadNo || this.broadNo}`;
+        if (this.endedBroadcast === key) return;
+        this.endedBroadcast = key;
+        this.system('방송이 종료되었습니다.');
+      };
+      this.on('broadcastEnd', this.endingHandler);
+    }
+  }
+
+  disconnected(data = {}) {
+    this.poll = null;
+    const key = `${data.bjId || this.client.bjId}:${data.broadNo || this.broadNo}`;
+    if (this.endedBroadcast !== key) this.system('방송 연결이 종료되었습니다.');
+    this.broadcast('state', this.state());
+  }
+
+  watchHistory() {
+    if (this.joiningHandler || this.closed) return;
+
+    const previous = this.events.get('join');
+    if (previous) this.client.off('join', previous);
+    this.since = 0;
+    this.joiningHandler = () => this.join();
+    this.on('join', this.joiningHandler);
+  }
+
+  join() {
+    const number = Number(this.client.channel?.BNO || 0);
+    if (number && number !== this.broadNo) {
+      if (this.broadNo) this.since = Date.now() - 1;
+      this.broadNo = number;
+    }
+    this.settlement = null;
+    this.flag = null;
+    this.slow = 0;
+    this.frozen = false;
+    this.users.clear();
+    this.kicked.clear();
+    this.system('방송에 연결되었습니다.');
+    this.broadcast('state', this.state());
+    void this.kicks().catch(() => {});
+  }
+
   watchViewer() {
     if (this.viewingHandler || this.closed) return;
 
@@ -465,6 +508,7 @@ export class Chat {
       login,
       logout: !login || this.client.info.LOGIN_ID !== this.basicAccount,
       connected,
+      members: connected ? this.client.userList.size : 0,
       since: this.since,
       viewers,
       manager,
@@ -495,12 +539,12 @@ export class Chat {
     const cached = this.users.get(id) || matching(this.users) || {};
     const flag = data.userFlag || cached.flag || current.flag;
     const info = userInfo(this.client, flag);
-    const tier = data.tier ?? info.tier;
+    const tier = data.tier ?? (flag ? info.tier : cached.tier ?? info.tier);
     const { fw, afw } = tier ? this.months(id) : {};
     const month = [data.subMonth, data.fw, data.month, fw]
       .map(Number).find(value => Number.isFinite(value) && value > 0) || 0;
-    const total = [data.accMonth, data.afw, afw, month]
-      .map(Number).find(value => Number.isFinite(value) && value > 0) || 0;
+    const total = Math.max(0, ...[data.accMonth, data.afw, data.total, afw, month]
+      .map(Number).filter(value => Number.isFinite(value) && value > 0));
 
     let name = String(
       data.userNick || data.fromNick || current.name || cached.name || id
@@ -519,12 +563,12 @@ export class Chat {
       id,
       name,
       kicked: this.kicked.has(id),
-      role: data.role || info.role,
+      role: data.role || (flag ? info.role : cached.role || info.role),
       tier,
-      tierName: data.tierName || info.tierName,
+      tierName: data.tierName || info.tierName || cached.tierName,
       month,
       total,
-      tierUrl: tier ? this.client.makeTierUrl?.(tier, month) || '' : ''
+      tierUrl: tier && total > 0 ? this.client.makeTierUrl?.(tier, total) || data.tierUrl || cached.tierUrl || '' : ''
     };
   }
 
@@ -538,7 +582,6 @@ export class Chat {
     const values = [this.client.userList?.get(id), this.users.get(id)].filter(Boolean);
     const positive = key => values.map(user => Number(user[key]))
       .find(value => Number.isFinite(value) && value > 0);
-    if (positive('fw') && positive('afw')) return { fw: positive('fw'), afw: positive('afw') };
     const station = id.replace(/\(\d+\)$/, '');
     for (const list of [this.client.userList, this.users]) {
       for (const [key, user] of list || []) {
@@ -547,7 +590,8 @@ export class Chat {
     }
     return {
       fw: positive('fw'),
-      afw: positive('afw')
+      afw: Math.max(0, ...values.map(user => Number(user.afw))
+        .filter(value => Number.isFinite(value) && value > 0))
     };
   }
 
@@ -558,11 +602,13 @@ export class Chat {
 
     const entry = {
       id: crypto.randomUUID(),
+      scope: this.scope,
       account: this.client.info?.IS_LOGIN === 1 ? this.client.info.LOGIN_ID || '' : '',
       date: new Date().toISOString(),
       type,
       user: this.user(data),
       message: String(data.message || ''),
+      silent: data.silent || undefined,
       image: data.imageUrl || '',
       ogq: data.ogqId || '',
       stickers: type === 'content' ? data.stickers : undefined,
@@ -592,6 +638,10 @@ export class Chat {
     if (entry.user.id && entry.user.tier && entry.user.month > 0) {
       this.users.set(entry.user.id, {
         ...this.users.get(entry.user.id),
+        tier: entry.user.tier,
+        role: entry.user.role,
+        tierName: entry.user.tierName,
+        tierUrl: entry.user.tierUrl,
         fw: entry.user.month,
         afw: entry.user.total
       });
@@ -609,7 +659,7 @@ export class Chat {
       }
     }
 
-    if (!['macro', 'content'].includes(type)) {
+    if (!entry.silent && !['macro', 'content'].includes(type)) {
       this.broadcast('chat', entry);
     }
 
@@ -742,6 +792,8 @@ export class Chat {
       data = { ...data, count };
       if (data.type === settle) {
         this.settlement = { count, time: Date.now() };
+
+        return;
       }
     }
 
@@ -754,13 +806,19 @@ export class Chat {
           ?? data.total_count
           ?? data.month
       ) || 0;
-    let message = `${gifts[event]} ${count}개`;
+    let message = count > 0 ? `${gifts[event]} ${count}개` : gifts[event];
 
     if (['follow', 'followEffect', 'subCeremony'].includes(event)) {
-      message = `${gifts[event]} ${data.month || 0}개월`;
+      const month = Number(data.month);
+      message = month > 0 ? `${gifts[event]} ${month}개월` : gifts[event];
     }
     else if (['quickview', 'subscription'].includes(event)) {
-      message = `${data.toNick || ''}님에게 ${gifts[event]}`;
+      const recipient = data.toNick || data.toId;
+      message = `${recipient ? `${recipient}님에게 ` : ''}${gifts[event]}`;
+    }
+    else if (event === 'ogqGift') {
+      const recipient = data.receivedName || data.receivedId;
+      message = `${recipient ? `${recipient}님에게 ` : ''}${gifts[event]}${data.title ? ` [${data.title}]` : ''}`;
     }
     else if (event === 'challenge' || event === 'battle') {
       message = `[${data.title || gifts[event]}] ${gifts[event]} ${count}개`;
@@ -769,7 +827,7 @@ export class Chat {
     this.add('gift', {
       ...data,
       category: ['challenge', 'battle'].includes(event) ? event : 'support',
-      userId: data.userId || data.user_id,
+      userId: data.userId || data.user_id || data.fromId,
       userNick: name,
       message
     });
@@ -779,13 +837,12 @@ export class Chat {
     const user = entry.user;
     const { fw: month, afw: total } = user?.id ? this.months(user.id) : {};
 
-    if (!user?.tier || user.month > 0 || !month) {
-      return;
+    if (!user?.tier) return;
+    user.month = user.month > 0 ? user.month : month || 0;
+    user.total = Math.max(user.total || 0, total || 0, user.month);
+    if (user.total > 0) {
+      user.tierUrl = this.client.makeTierUrl?.(user.tier, user.total) || user.tierUrl || '';
     }
-
-    user.month = month;
-    user.total = total || month;
-    user.tierUrl = this.client.makeTierUrl?.(user.tier, user.month) || '';
   }
 
   filename() {
@@ -872,6 +929,64 @@ export class Chat {
     return this.history(options.cursor || '', '', '', { type, text, start, end });
   }
 
+  async monthly(user) {
+    const id = String(user || '').replace(/\(\d+\)$/, '');
+    if (!id || id.length > 100) throw new Error('시청자를 확인해주세요.');
+    const month = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 7);
+    const start = Date.parse(`${month}-01T00:00:00+09:00`);
+    const [year, number] = month.split('-').map(Number);
+    const end = Date.UTC(year, number, 1) - 9 * 3600000;
+    const dates = fs.existsSync(this.directory) ? fs.readdirSync(this.directory)
+      .filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date) && date.startsWith(month)).sort() : [];
+    const files = dates.map(date => path.join(this.directory, date, this.filename()))
+      .filter(file => fs.existsSync(file));
+    const signature = files.map(file => {
+      const stat = fs.statSync(file);
+      return `${file}:${stat.size}:${stat.mtimeMs}`;
+    }).join('|');
+    this.monthlyCounts ??= new Map();
+    const key = `${this.client.bjId}:${month}:${id}`;
+    const cached = this.monthlyCounts.get(key);
+    if (cached?.signature === signature) return cached.promise;
+
+    const promise = (async () => {
+      let count = 0;
+      const recent = new Map();
+      for (const file of files) {
+        const input = fs.createReadStream(file);
+        const lines = readline.createInterface({ input, crlfDelay: Infinity });
+        try {
+          for await (const line of lines) {
+            let entry;
+            try { entry = JSON.parse(line); } catch { continue; }
+            if (!['chat', 'ogq'].includes(entry?.type)
+              || String(entry.user?.id || '').replace(/\(\d+\)$/, '') !== id) continue;
+            const date = Date.parse(entry.date);
+            if (!Number.isFinite(date) || date < start || date >= end) continue;
+            const message = JSON.stringify([entry.type, entry.message, entry.image, entry.ogq]);
+            const previous = recent.get(message);
+            if (previous && Math.abs(previous.date - date) <= 50
+              && (previous.id && previous.id === entry.id || previous.scope !== entry.scope || previous.account !== entry.account)) continue;
+            recent.delete(message);
+            recent.set(message, { id: entry.id, date, scope: entry.scope, account: entry.account });
+            if (recent.size > 128) recent.delete(recent.keys().next().value);
+            count++;
+          }
+        } finally {
+          lines.close();
+          input.destroy();
+        }
+      }
+      return count;
+    })();
+    this.monthlyCounts.set(key, { signature, promise });
+    if (this.monthlyCounts.size > 200) this.monthlyCounts.delete(this.monthlyCounts.keys().next().value);
+    try { return await promise; } catch (error) {
+      if (this.monthlyCounts.get(key)?.promise === promise) this.monthlyCounts.delete(key);
+      throw error;
+    }
+  }
+
   history(cursor = '', user = '', type = '', search) {
     if (type && type !== 'manager') {
       throw new Error('채팅 종류 오류');
@@ -935,7 +1050,11 @@ export class Chat {
       }
 
       const account = this.client.info?.IS_LOGIN === 1 ? this.client.info.LOGIN_ID || '' : '';
-      if (!search && Object.hasOwn(entry, 'account') && entry.account !== account) {
+      const scoped = !user || ['manager', 'whisper'].includes(entry.type);
+      if (!search && scoped && entry.type !== 'manager' && entry.scope && this.scope && entry.scope !== this.scope) {
+        return false;
+      }
+      if (!search && scoped && Object.hasOwn(entry, 'account') && entry.account !== account) {
         return false;
       }
 
@@ -981,7 +1100,9 @@ export class Chat {
         return text.includes(search.text);
       }
 
-      return selected && (!user || entry.user?.id === user);
+      if (entry.silent || entry.type === 'error' && errors.transient(entry.message)) return false;
+      return selected && (!user || String(entry.user?.id || '').replace(/\(\d+\)$/, '')
+        === user.replace(/\(\d+\)$/, ''));
     };
     let before;
 
@@ -1004,6 +1125,27 @@ export class Chat {
     }
 
     const entries = [];
+    const recent = new Map();
+    const shared = new Map();
+    const collect = entry => {
+      if (user && ['chat', 'ogq'].includes(entry.type)) {
+        const key = JSON.stringify([entry.type, entry.user?.id?.replace(/\(\d+\)$/, ''), entry.message, entry.image, entry.ogq]);
+        const date = Date.parse(entry.date);
+        const previous = shared.get(key);
+        if (previous && (previous.scope !== entry.scope || previous.account !== entry.account)
+          && Math.abs(previous.date - date) <= 50) return;
+        shared.set(key, { date, scope: entry.scope, account: entry.account });
+      }
+      if (!entry.scope && ['chat', 'ogq', 'manager'].includes(entry.type)) {
+        const key = JSON.stringify([entry.account, entry.type, entry.user?.id, entry.message, entry.image, entry.ogq]);
+        const date = Date.parse(entry.date);
+        const previous = recent.get(key);
+        if (previous !== undefined && Math.abs(previous - date) <= 50) return;
+        recent.set(key, date);
+      }
+      this.subscription(entry);
+      entries.push(entry);
+    };
     const dates = fs.existsSync(this.directory)
       ? fs.readdirSync(this.directory).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date))
       : [];
@@ -1073,8 +1215,7 @@ export class Chat {
                   const entry = normalize(value, name, date, offset + index + 1);
 
                   if (matches(entry)) {
-                    this.subscription(entry);
-                    entries.push(entry);
+                    collect(entry);
                   }
                 } catch {}
               }
@@ -1097,8 +1238,7 @@ export class Chat {
               const entry = normalize(value, name, date, 0);
 
               if (matches(entry)) {
-                this.subscription(entry);
-                entries.push(entry);
+                collect(entry);
               }
             } catch {}
           }
@@ -1133,6 +1273,42 @@ export class Chat {
       clearInterval(timer);
       this.pages.delete(response);
     });
+  }
+
+  refreshMembers() {
+    const client = this.client;
+    if (this.closed || !client.isOpen?.()) return Promise.resolve();
+    if (this.memberRequest?.client === client) return this.memberRequest.promise;
+    if (this.memberRequestedClient === client && Date.now() - this.memberRequestedAt < 5000) {
+      return Promise.resolve();
+    }
+
+    this.memberRequestedClient = client;
+    this.memberRequestedAt = Date.now();
+    const pending = { client };
+    this.memberRequest = pending;
+    pending.promise = new Promise(resolve => {
+      let quiet;
+      const finish = () => {
+        clearTimeout(timeout);
+        clearTimeout(quiet);
+        client.off('userList', updated);
+        client.off('chuser', updated);
+        if (this.memberRequest === pending) this.memberRequest = null;
+        resolve();
+      };
+      const updated = () => {
+        clearTimeout(quiet);
+        quiet = setTimeout(finish, 100);
+      };
+      const timeout = setTimeout(finish, 1500);
+      client.on('userList', updated);
+      client.on('chuser', updated);
+      Promise.resolve().then(() => client.sendUserList()).then(sent => {
+        if (!sent) finish();
+      }, finish);
+    });
+    return pending.promise;
   }
 
   members(query = '', cursor = '') {

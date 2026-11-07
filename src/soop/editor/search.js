@@ -86,13 +86,13 @@ export function createSearch(request, select, profile, preview) {
     return button;
   };
   const close = () => {
-    const results = document.body.classList.contains('searching');
+    const results = document.documentElement.classList.contains('searching');
     clearTimeout(timer);
     version++;
     loading = false;
     panel.hidden = true;
     panel.classList.remove('results');
-    document.body.classList.remove('searching');
+    document.documentElement.classList.remove('searching');
     if (results) window.scrollTo(0, scroll);
     if (/\/search\/?$/.test(location.pathname)) {
       history.replaceState(history.state, '', base);
@@ -281,8 +281,8 @@ export function createSearch(request, select, profile, preview) {
     loading = true;
     panel.hidden = false;
     panel.classList.add('results');
-    if (!document.body.classList.contains('searching')) scroll = window.scrollY;
-    document.body.classList.add('searching');
+    if (!document.documentElement.classList.contains('searching')) scroll = window.scrollY;
+    document.documentElement.classList.add('searching');
     if (initial) window.scrollTo(0, 0);
     $('search-more').hidden = true;
     message.textContent = '';
@@ -317,7 +317,7 @@ export function createSearch(request, select, profile, preview) {
     if (!value) { close(); return; }
     const current = ++version;
     panel.classList.remove('results');
-    document.body.classList.remove('searching');
+    document.documentElement.classList.remove('searching');
     suggestions.replaceChildren();
     panel.hidden = true;
     message.textContent = '';

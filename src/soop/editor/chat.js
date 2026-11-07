@@ -1,13 +1,15 @@
 import { DOMAIN } from '/config.js';
 import { createSubtitle } from '/subtitle.js';
 import { drag } from './scroll.js';
-import * as identity from './identity.js';
+import * as identityModule from './identity.js';
+import * as network from './request.js';
+import * as cheering from './cheering.js';
 
 let popup;
 
 window.addEventListener('theme', () => {
   if (popup && !popup.closed) {
-    popup.document.body.classList.toggle('dark', document.body.classList.contains('dark'));
+    popup.document.documentElement.classList.toggle('dark', document.documentElement.classList.contains('dark'));
   }
 });
 
@@ -78,7 +80,7 @@ function notification(node, message, emoticons) {
 }
 
 function donation(node, message, emoticons) {
-  const text = String(message);
+  const text = String(message).replace(/ 0(?:개|개월)$/, '');
   const match = text.match(/[\d,]+(?=개|개월)/);
 
   if (!match) {
@@ -283,6 +285,19 @@ export function createChat(token, inspect, select) {
 
   document.body.append(panel);
 
+  const positions = new WeakMap();
+  const placement = node => {
+    const sheet = [...node.ownerDocument.styleSheets].find(item => item.href
+      && new URL(item.href).pathname.endsWith('/chat.css'));
+    if (!sheet) return null;
+    if (!positions.has(sheet)) positions.set(sheet, new Map());
+    const rules = positions.get(sheet);
+    if (!rules.has(node.id)) {
+      const index = sheet.insertRule(`#${CSS.escape(node.id)} {}`, sheet.cssRules.length);
+      rules.set(node.id, sheet.cssRules[index].style);
+    }
+    return rules.get(node.id);
+  };
   const place = () => {
     const view = composer.ownerDocument.defaultView;
     const viewport = view.visualViewport;
@@ -305,16 +320,18 @@ export function createChat(token, inspect, select) {
       if (node === iconPanel && docked) continue;
 
       const anchor = $(anchors[node.id] || 'chat-menu-open').getBoundingClientRect();
+      const style = placement(node);
+      if (!style) continue;
       if (node === iconPanel) {
-        node.style.setProperty('--chat-icons-width', `${$('chat-send').getBoundingClientRect().width}px`);
+        style.setProperty('--chat-icons-width', `${$('chat-send').getBoundingClientRect().width}px`);
       }
       const width = node.getBoundingClientRect().width;
       const bottom = Math.max(top + 12, Math.min(bounds.top - 8, top + height - 12));
       const left = node === iconPanel ? bounds.left : anchor.left + anchor.width / 2 - width / 2;
 
-      node.style.setProperty('--chat-popup-left', `${Math.max(12, Math.min(left, view.innerWidth - width - 12))}px`);
-      node.style.setProperty('--chat-popup-bottom', `${view.innerHeight - bottom}px`);
-      node.style.setProperty('--chat-popup-height', `${Math.max(0, bottom - top - 12)}px`);
+      style.setProperty('--chat-popup-left', `${Math.max(12, Math.min(left, view.innerWidth - width - 12))}px`);
+      style.setProperty('--chat-popup-bottom', `${view.innerHeight - bottom}px`);
+      style.setProperty('--chat-popup-height', `${Math.max(0, bottom - top - 12)}px`);
     }
   };
   const showChat = node => {
@@ -352,6 +369,7 @@ export function createChat(token, inspect, select) {
   const entries = new WeakMap();
   const settings = { emotes: true, motion: true, small: true, entry: false, whisper: false, size: 2 };
   let cleared = 0;
+  let archived = false;
   let translating = false;
   let queue = Promise.resolve();
   let queued = 0;
@@ -381,6 +399,7 @@ export function createChat(token, inspect, select) {
   let kicks = 0;
   let members = 0;
   let listing = false;
+  let memberRefresh = false;
   let memberCursor = '';
   let memberRole = '';
   let memberQuery = '';
@@ -693,15 +712,10 @@ export function createChat(token, inspect, select) {
       options.body = JSON.stringify(data);
     }
 
-    const response = await fetch(address(url), options);
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || '채팅 요청 실패');
-    }
-
-    return result;
+    return network.request(address(url), options);
   };
+  const cheer = cheering.createCheering(request, showChat,
+    (node, text) => content(node, text, icons), () => input.value, $);
 
   const bottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 4;
   let logHeight = log.clientHeight;
@@ -781,7 +795,7 @@ export function createChat(token, inspect, select) {
     }
 
     append({
-      id: identity.create(),
+      id: identityModule.create(),
       date: new Date().toISOString(),
       type: error ? 'error' : 'system',
       message
@@ -814,14 +828,28 @@ export function createChat(token, inspect, select) {
     }
   });
 
+  const refreshMembers = () => {
+    if (!$('members').open || $('members-list').scrollTop >= 100) return;
+    memberRefresh = true;
+    if (!listing) {
+      clearTimeout(memberTimer);
+      memberTimer = setTimeout(() => void participants(true), 150);
+    }
+  };
+
   const access = value => {
+    const membersChanged = state.members !== value.members || state.connected !== value.connected
+      || state.userId !== value.userId;
     if (value.since > (state.since || 0)) {
-      cleared = Math.max(cleared, value.since);
+      archived = true;
       cursor = '';
       observer.disconnect();
       for (const node of log.querySelectorAll('.chat-row')) {
         const entry = entries.get(node);
-        if (entry && new Date(entry.date).getTime() <= cleared) node.remove();
+        if (entry && new Date(entry.date).getTime() <= value.since) {
+          seen.delete(entry.id);
+          node.remove();
+        }
         else observer.observe(node);
       }
       dates(log);
@@ -872,6 +900,7 @@ export function createChat(token, inspect, select) {
     }
 
     $('members-open').disabled = !state.connected;
+    if (membersChanged && state.connected) refreshMembers();
     $('chat-receive-enabled').checked = state.receive !== false;
     $('chat-receive-enabled').disabled = receiving || !state.login || !state.connected;
 
@@ -1062,14 +1091,7 @@ export function createChat(token, inspect, select) {
       return node;
     }
 
-    const user = entry.user || {};
-    const cached = users.get(user.id);
-
-    if (cached && user.tier && !user.month) {
-      const { month, total, tierUrl, tierName } = cached;
-
-      Object.assign(user, { month, total, tierUrl, tierName });
-    }
+    const user = identityModule.subscription(entry.user || {}, users.get(entry.user?.id));
 
     node.dataset.role = user.role || '';
 
@@ -1267,33 +1289,36 @@ export function createChat(token, inspect, select) {
     pending = true;
 
     const version = revision;
-    const initial = !loaded;
-
     try {
-      const params = new URLSearchParams({ type: 'manager', cursor: previous });
-      const data = await request(`/api/chat?${params}`);
+      do {
+        const initial = !loaded;
+        const cursor = previous;
+        const params = new URLSearchParams({ type: 'manager', cursor });
+        const data = await request(`/api/chat?${params}`);
 
-      if (version !== revision || !(state.manager || state.managerHistory)) {
-        return;
-      }
-
-      const height = messages.scrollHeight;
-      const fragment = document.createDocumentFragment();
-
-      for (const entry of data.entries) {
-        if (!managers.has(entry.id)) {
-          managers.add(entry.id);
-          fragment.append(row(entry));
+        if (version !== revision || !(state.manager || state.managerHistory)) {
+          return;
         }
-      }
 
-      messages.prepend(fragment);
-      dates(messages);
-      messages.scrollTop = initial
-        ? messages.scrollHeight
-        : messages.scrollTop + messages.scrollHeight - height;
-      previous = data.cursor;
-      loaded = true;
+        const height = messages.scrollHeight;
+        const top = messages.scrollTop;
+        const fragment = document.createDocumentFragment();
+
+        for (const entry of data.entries) {
+          if (!managers.has(entry.id)) {
+            managers.add(entry.id);
+            fragment.append(row(entry));
+          }
+        }
+
+        messages.prepend(fragment);
+        dates(messages);
+        messages.scrollTop = initial
+          ? messages.scrollHeight
+          : top + messages.scrollHeight - height;
+        previous = data.cursor === cursor ? '' : data.cursor;
+        loaded = true;
+      } while (previous && (messages.scrollHeight <= messages.clientHeight || messages.scrollTop < 100));
     } catch (error) {
       if (version === revision) {
         status(error.message);
@@ -1306,11 +1331,7 @@ export function createChat(token, inspect, select) {
   };
 
   const renew = user => {
-    const cached = users.get(user.id);
-    const data = { ...cached, ...user };
-    if (user.tier && !user.month && cached?.month > 0) {
-      Object.assign(data, { month: cached.month, total: cached.total, tierUrl: cached.tierUrl });
-    }
+    const data = identityModule.subscription(user, users.get(user.id));
 
     users.set(user.id, data);
 
@@ -1320,7 +1341,7 @@ export function createChat(token, inspect, select) {
       }
 
       const tier = identity.querySelector('.chat-tier');
-      const icon = image(user.tierUrl, subscription(user));
+      const icon = image(data.tierUrl, subscription(data));
 
       tier?.remove();
 
@@ -1340,6 +1361,7 @@ export function createChat(token, inspect, select) {
   };
 
   const append = entry => {
+    if (entry.category === 'presence') refreshMembers();
     if (seen.has(entry.id) || announcement(entry) || new Date(entry.date).getTime() <= cleared) {
       return;
     }
@@ -1394,7 +1416,7 @@ export function createChat(token, inspect, select) {
   };
 
   const history = async initial => {
-    if (loading || (!initial && !cursor)) {
+    if (loading || (!initial && !cursor && !archived)) {
       return;
     }
 
@@ -1440,8 +1462,9 @@ export function createChat(token, inspect, select) {
       log.prepend(fragment);
       dates(log);
 
-      if (!existing) {
+      if (!existing || !initial) {
         cursor = data.cursor;
+        archived = false;
       }
       access(data.state);
 
@@ -1473,6 +1496,7 @@ export function createChat(token, inspect, select) {
 
     if (initial) {
       collection++;
+      older = '';
     }
 
     const user = viewer;
@@ -1481,32 +1505,43 @@ export function createChat(token, inspect, select) {
     collecting = true;
 
     try {
-      const params = new URLSearchParams({ user: user.id, cursor: initial ? '' : older });
-      const data = await request(`/api/chat?${params}`);
-
-      if (viewer !== user || version !== collection) {
-        return;
-      }
-
+      let first = initial;
       const log = $('chat-history-log');
-      const height = log.scrollHeight;
-      const top = log.scrollTop;
-      const fragment = document.createDocumentFragment();
 
-      for (const entry of data.entries) {
-        fragment.append(row(entry));
-      }
+      do {
+        const cursor = first ? '' : older;
+        const params = new URLSearchParams({ user: user.id, cursor });
+        if (first) params.set('month', '1');
+        const data = await request(`/api/chat?${params}`);
 
-      log.prepend(fragment);
-      dates(log);
-      older = data.cursor;
+        if (viewer !== user || version !== collection || !$('chat-history').open) {
+          return;
+        }
+        if (Number.isSafeInteger(data.count)) {
+          $('chat-history-count').textContent = `(${data.count.toLocaleString('ko-KR')})`;
+          $('chat-history-count').hidden = false;
+        }
 
-      if (initial) {
-        log.scrollTop = log.scrollHeight;
-      }
-      else {
-        log.scrollTop = top + log.scrollHeight - height;
-      }
+        const height = log.scrollHeight;
+        const top = log.scrollTop;
+        const fragment = document.createDocumentFragment();
+
+        for (const entry of data.entries) {
+          fragment.append(row(entry, true));
+        }
+
+        log.prepend(fragment);
+        dates(log);
+        older = data.cursor === cursor ? '' : data.cursor;
+
+        if (initial) {
+          log.scrollTop = log.scrollHeight;
+        }
+        else {
+          log.scrollTop = top + log.scrollHeight - height;
+        }
+        first = false;
+      } while (older && (log.scrollHeight <= log.clientHeight || log.scrollTop < 100));
     } finally {
       if (version === collection) {
         collecting = false;
@@ -1528,6 +1563,82 @@ export function createChat(token, inspect, select) {
 
     return node;
   };
+
+  let banUser;
+  let banCursor = null;
+  let banVersion = 0;
+  let banLoading = false;
+  const loadBans = async initial => {
+    if (!banUser || banLoading || !initial && banCursor === null) return;
+    const version = banVersion;
+    banLoading = true;
+    $('chat-bans-status').textContent = '불러오는 중';
+    $('chat-bans-more').disabled = true;
+    try {
+      const query = new URLSearchParams({ id: banUser.id, cursor: String(initial ? 0 : banCursor) });
+      const data = await request(`/api/bans?${query}`);
+      if (version !== banVersion || !$('chat-bans').open) return;
+      $('chat-bans-source').href = data.url;
+      const summary = data.summary;
+      $('chat-bans-summary').replaceChildren(...[
+        Number.isFinite(summary.banCount) ? `강제 퇴장 ${summary.banCount.toLocaleString('ko-KR')}회` : '',
+        Number.isFinite(summary.chatRestrictionCount) ? `채팅 금지 ${summary.chatRestrictionCount.toLocaleString('ko-KR')}회` : ''
+      ].filter(Boolean).map(text => {
+        const badge = document.createElement('span');
+        badge.textContent = text;
+        return badge;
+      }));
+      for (const entry of data.entries) {
+        const card = document.createElement('article');
+        card.className = 'chat-ban';
+        const title = document.createElement('strong');
+        title.textContent = entry.type + (entry.duration > 0 ? ` ${entry.duration}초` : '');
+        const when = document.createElement('time');
+        if (Number.isFinite(Date.parse(entry.date))) when.dateTime = new Date(entry.date).toISOString();
+        when.textContent = Number.isFinite(Date.parse(entry.date)) ? new Date(entry.date).toLocaleString('ko-KR') : '';
+        const heading = document.createElement('div');
+        heading.className = 'chat-ban-heading';
+        heading.append(title, when);
+        const info = document.createElement('dl');
+        for (const [label, value] of [
+          ['방송', entry.channel || '확인되지 않음'],
+          ['처리자', `${entry.actor || '확인되지 않음'}${entry.actorId && entry.actorId !== entry.actor ? `(${entry.actorId})` : ''}`]
+        ]) {
+          const term = document.createElement('dt');
+          term.textContent = label;
+          const detail = document.createElement('dd');
+          detail.textContent = value;
+          info.append(term, detail);
+        }
+        card.append(heading, info);
+        if (entry.messages.length) {
+          const details = document.createElement('details');
+          const label = document.createElement('summary');
+          label.textContent = `직전 채팅 ${entry.messages.length}개`;
+          details.append(label);
+          for (const chat of entry.messages) {
+            const line = document.createElement('p');
+            line.textContent = chat.message;
+            details.append(line);
+          }
+          card.append(details);
+        }
+        $('chat-bans-list').append(card);
+      }
+      banCursor = data.cursor;
+      $('chat-bans-more').hidden = banCursor === null;
+      $('chat-bans-status').textContent = $('chat-bans-list').children.length ? '' : '위플뷰에 조회된 기록이 없습니다.';
+    } catch (error) {
+      if (version === banVersion) $('chat-bans-status').textContent = error.message;
+    } finally {
+      if (version === banVersion) {
+        banLoading = false;
+        $('chat-bans-more').disabled = false;
+      }
+    }
+  };
+  $('chat-bans-more').addEventListener('click', () => void loadBans(false));
+  $('chat-bans').addEventListener('close', () => { banVersion++; banLoading = false; });
 
   const actions = () => {
     $('chat-person-actions').replaceChildren();
@@ -1559,6 +1670,20 @@ export function createChat(token, inspect, select) {
         $('chat-person').close();
         $('channel').showModal();
         $('station-tabs').querySelector('[data-type="board"]').click();
+      });
+      button('제재내역', async () => {
+        banUser = { id, name: person.name };
+        banVersion++;
+        banLoading = false;
+        banCursor = null;
+        $('chat-bans-name').textContent = banUser.name;
+        $('chat-bans-summary').textContent = '';
+        $('chat-bans-list').replaceChildren();
+        $('chat-bans-more').hidden = true;
+        $('chat-bans-source').href = `https://weflview.com/ban-tracker/viewer/soop/${encodeURIComponent(id)}`;
+        $('chat-person').close();
+        $('chat-bans').showModal();
+        await loadBans(true);
       });
       $('chat-person-actions').append(document.createElement('hr'));
     }
@@ -1613,6 +1738,7 @@ export function createChat(token, inspect, select) {
 
       $('chat-person').close();
       $('chat-history-log').replaceChildren();
+      $('chat-history-count').hidden = true;
       $('chat-history').showModal();
       await collect(true);
     });
@@ -1685,7 +1811,7 @@ export function createChat(token, inspect, select) {
   };
 
   const open = async user => {
-    user = { ...user, ...users.get(user.id) };
+    user = identityModule.subscription(user, users.get(user.id));
     profile(user);
 
     try {
@@ -1696,10 +1822,7 @@ export function createChat(token, inspect, select) {
       }
 
       if (data.user) {
-        const latest = { ...user, ...data.user };
-        if (data.user.tier && !data.user.month && user.month > 0) {
-          Object.assign(latest, { month: user.month, total: user.total, tierUrl: user.tierUrl });
-        }
+        const latest = identityModule.subscription(data.user, user);
 
         if (data.user.name === data.user.id) {
           latest.name = user.name;
@@ -1737,7 +1860,7 @@ export function createChat(token, inspect, select) {
     const version = epoch;
 
     try {
-      const response = await fetch(address('/api/chat'), {
+      const response = await network.open(address('/api/chat'), {
         headers: { Authorization: `Bearer ${token()}`, Accept: 'text/event-stream' },
         signal: current.signal
       });
@@ -2046,10 +2169,10 @@ export function createChat(token, inspect, select) {
     manage({ action: 'slow', count: 0 });
   });
   const display = () => {
-    document.body.dataset.chatSize = settings.size;
+    document.documentElement.dataset.chatSize = settings.size;
 
     if (popup && !popup.closed) {
-      popup.document.body.dataset.chatSize = settings.size;
+      popup.document.documentElement.dataset.chatSize = settings.size;
     }
 
     $('conversation').classList.toggle('chat-small-ogq', settings.small);
@@ -2131,7 +2254,7 @@ export function createChat(token, inspect, select) {
 
     translating = event.target.checked;
   });
-  $('chat-popup').target = `chat-${identity.create()}`;
+  $('chat-popup').target = `chat-${identityModule.create()}`;
   $('chat-popup').addEventListener('click', event => {
     if (popup && !popup.closed) {
       event.preventDefault();
@@ -2175,9 +2298,9 @@ export function createChat(token, inspect, select) {
         popup = undefined;
         return;
       }
-      child.body.className = document.body.className;
-      child.body.classList.add('chat-window');
-      child.body.dataset.chatSize = settings.size;
+      child.documentElement.classList.toggle('dark', document.documentElement.classList.contains('dark'));
+      child.documentElement.classList.add('chat-window');
+      child.documentElement.dataset.chatSize = settings.size;
 
       for (const node of nodes) {
         const anchor = document.createComment('chat-popup');
@@ -2212,7 +2335,7 @@ export function createChat(token, inspect, select) {
   }
   for (const id of [
     'chat-display', 'chat-entry', 'chat-receive', 'chat-translation', 'chat-size',
-    'chat-nickname', 'chat-multi'
+    'chat-nickname', 'chat-multi', 'chat-cheer'
   ]) {
     const back = document.createElement('button');
 
@@ -3096,6 +3219,8 @@ export function createChat(token, inspect, select) {
 
   const participants = async reset => {
     if (reset) {
+      clearTimeout(memberTimer);
+      memberRefresh = false;
       members++;
       listing = false;
       memberCursor = '';
@@ -3174,6 +3299,10 @@ export function createChat(token, inspect, select) {
     } finally {
       if (version === members) {
         listing = false;
+        if (memberRefresh && $('members').open) {
+          clearTimeout(memberTimer);
+          memberTimer = setTimeout(() => void participants(true), 150);
+        }
       }
     }
   };
@@ -3198,6 +3327,7 @@ export function createChat(token, inspect, select) {
   });
   $('members').addEventListener('close', () => {
     clearTimeout(memberTimer);
+    memberRefresh = false;
     members++;
     listing = false;
   });
@@ -3275,7 +3405,7 @@ export function createChat(token, inspect, select) {
         node.className = 'station-item';
         content.className = 'station-content';
         meta.className = 'station-meta';
-        title.textContent = fan ? item.name || item.id : item.title;
+        title.textContent = fan ? item.name || item.id : `${item.notice ? '[공지] ' : ''}${item.title || ''}`;
 
         if (fan) {
           const rank = document.createElement('span');
@@ -3489,6 +3619,7 @@ export function createChat(token, inspect, select) {
     }
     if (!items.length) {
       const empty = document.createElement('p');
+      empty.className = 'chat-icons-empty';
       empty.textContent = selectedTab === 'recent' ? '최근 사용한 이모티콘이 없습니다.' : '이모티콘이 없습니다.';
       list.append(empty);
     }
@@ -3662,9 +3793,11 @@ export function createChat(token, inspect, select) {
     'chat-translation',
     'chat-size',
     'chat-multi',
+    'chat-cheer',
     'chat-nickname',
     'chat-icons',
     'chat-history',
+    'chat-bans',
     'chat-communication',
     'chat-rule',
     'chat-poll',
@@ -3725,6 +3858,7 @@ export function createChat(token, inspect, select) {
       subtitle();
     },
     update(data) {
+      cheer.update(data);
       const changed = endpoint !== (data.chat || '');
       endpoint = data.chat || '';
       if (changed) {
@@ -3783,6 +3917,8 @@ export function createChat(token, inspect, select) {
 
         this.support(false);
         channel = data.player;
+        cleared = 0;
+        archived = false;
         agreed = '';
         captions.clear();
         subtitle();

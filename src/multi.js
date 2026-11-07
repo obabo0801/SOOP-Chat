@@ -31,7 +31,6 @@ function shutdown() {
       await log.flush();
     })
     .catch(() => {
-      console.error('종료 실패');
       process.exitCode = 1;
     });
 
@@ -147,7 +146,6 @@ async function stop() {
       log.info('[종료]', '실행 중인 연결 없음');
     }
     else {
-      log.error('[종료]', '종료 실패');
       process.exitCode = 1;
     }
   }

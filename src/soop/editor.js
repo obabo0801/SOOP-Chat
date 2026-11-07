@@ -212,6 +212,7 @@ async function createEditor(macro, options = {}) {
   const context = {
     macro, account, password, passwordHash, attempts, allowed, token, chat, video, pages, key, origins,
     videoEnabled: options.videoEnabled !== false,
+    recordingEnabled: Boolean(options.recordingEnabled),
     accessPassword, accessHash, accessAttempts, accessToken,
     stop: options.stop,
     fixed: Boolean(options.fixed),
@@ -253,6 +254,7 @@ async function createEditor(macro, options = {}) {
 
   const origin = `http://${authority}:${server.address().port}`;
   macro.client.multiScope = String(server.address().port);
+  chat.scope = String(server.address().port);
 
   allowed.add(origin);
   context.screens = createScreens(context);
@@ -309,9 +311,10 @@ async function createEditor(macro, options = {}) {
     context.stopRequested = Boolean(options.forget);
     context.screens.close();
     context.previews?.close();
+    context.cheer?.close();
     const stopped = new Promise(resolve => server.close(resolve));
 
-    closing = Promise.all([stopped, video.close()]);
+    closing = Promise.all([stopped, Promise.resolve(context.recordingController?.close()).then(() => video.close())]);
     chat.close();
     editors.delete(macro);
 

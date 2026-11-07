@@ -259,7 +259,8 @@ export async function postReaction(bjId, broadNo, action, options = {}) {
   if (action === 'favorite') {
     const data = { szBjId: bjId, szFrom: 'html5', szLocation: 'live', szClub: 'y' };
     const route = '/afreeca/favorite_list_api.php';
-    const checked = await call(route, { ...data, szWork: 'CHECKFAVORITE' });
+    const checked = typeof options.active === 'boolean' ? null
+      : await call(route, { ...data, szWork: 'CHECKFAVORITE' });
     const remove = typeof options.active === 'boolean' ? !options.active : Number(checked?.CHANNEL?.RESULT) === -5;
     const result = await call(route, { ...data, szWork: remove ? 'DELFAVORITE' : 'ADDFAVORITE' }, remove ? 'POST' : 'GET');
     if (Number(result?.CHANNEL?.RESULT) !== 1) throw new Error('즐겨찾기를 변경하지 못했습니다.');
@@ -268,12 +269,12 @@ export async function postReaction(bjId, broadNo, action, options = {}) {
   if (action === 'up' && broadNo) {
     const data = { szBjId: bjId, nBroadNo: String(broadNo), szFileType: 'jsonp' };
     const code = await call('/api/ok_api.php', { ...data, szWork: 'createCode' });
-    if (Number(code?.RESULT) !== 1 && String(code?.MSG || '').includes('이미 UP')) return { active: true };
+    if (Number(code?.RESULT) !== 1 && String(code?.MSG || '').includes('이미 UP')) return { active: true, changed: false };
     if (Number(code?.RESULT) !== 1) throw new Error(code?.MSG || 'UP을 보낼 수 없습니다.');
     const result = await call('/api/ok_api.php', { ...data, szWork: 'sendOk', szData: code.MSG, szPlayerType: 'html5' });
-    if (Number(result?.RESULT) !== 1 && String(result?.MSG || '').includes('이미 UP')) return { active: true };
+    if (Number(result?.RESULT) !== 1 && String(result?.MSG || '').includes('이미 UP')) return { active: true, changed: false };
     if (Number(result?.RESULT) !== 1) throw new Error(result?.MSG || 'UP을 보낼 수 없습니다.');
-    return { active: true };
+    return { active: true, changed: true };
   }
   throw new Error('요청 오류');
 }
@@ -810,12 +811,14 @@ export async function getContent(bjId, titleNo, options = {}) {
     signal = AbortSignal.timeout(10000);
   }
 
-  const response = await request(url, { headers, signal });
-  const data = await response.json();
+  try {
+    const response = await request(url, { headers, signal });
+    const data = await response.json();
 
-  const result = { status: response.status, data };
-
-  return result;
+    return { status: response.status, data };
+  } catch (error) {
+    throw requestError(error, url, options.signal);
+  }
 }
 
 export async function getComments(bjId, titleNo, page = 1, options = {}) {
@@ -988,6 +991,41 @@ export async function getRecent(options = {}) {
   const result = json?.DATA;
 
   return result;
+}
+
+export async function getPersonalcon(bjId, options = {}) {
+  const address = new URL('/api/personalcon_api.php', DOMAIN.live);
+  address.search = new URLSearchParams({ work: 'list', szBjId: bjId, v: 'tier' });
+  const result = await requestJson(address, { ...options, method: 'GET' });
+  if (Number(result?.RESULT) !== 1 || !result.data || typeof result.data !== 'object') {
+    throw new Error('구독티콘 정보를 확인하지 못했습니다.');
+  }
+  return Object.fromEntries(Object.entries(result.data).filter(([key, list]) =>
+    /^tier\d+$/.test(key) && Array.isArray(list)).map(([key, list]) => [key, list
+    .filter(item => Number.isFinite(Number(item.month)) && Number(item.month) >= 0 && item.tmp_filename)
+    .map(item => ({ MONTH: Number(item.month), FILENAME: normalize(item.tmp_filename) }))]));
+}
+
+export async function getSubscription(bjId, userId, options = {}) {
+  const address = new URL('/api/subscription_api.php', DOMAIN.st);
+  address.search = new URLSearchParams({ type: 'GetSubscriberInfo', userId, bjId, plusGiftFirst: '0' });
+  const [info, personalcon] = await Promise.all([
+    requestJson(address, { ...options, method: 'GET' }),
+    getPersonalcon(bjId, options)
+  ]);
+  if (Number(info?.result) !== 1 || !Array.isArray(info.data)) {
+    throw new Error('구독 정보를 확인하지 못했습니다.');
+  }
+  const item = info.data.find(value => value.user_id === userId && value.bj_id === bjId
+    && Date.parse(String(value.expire_payment_date).replace(' ', 'T') + '+09:00') > Date.now());
+  if (!item) return { tier: 0, month: 0, total: 0, tierUrl: '' };
+  const tier = Number(item.tier_type) || 0;
+  const month = Number(item.payment_count) || 0;
+  const total = Number(item.acc_payment_count) || month;
+  const list = personalcon[`tier${tier}`];
+  const image = Array.isArray(list) ? [...list].filter(value => value.MONTH <= total)
+    .sort((a, b) => b.MONTH - a.MONTH)[0]?.FILENAME : '';
+  return { tier, month, total, tierUrl: image ? normalize(image) : '' };
 }
 
 export async function getSignature(bjId, options = {}) {
@@ -1206,6 +1244,16 @@ export function md5(data) {
   return crypto.createHash('md5').update(data).digest('hex');
 }
 
+function requestError(error, url, signal) {
+  if (signal?.aborted || error?.name !== 'TimeoutError' || error.requestHost) return error;
+  const host = new URL(url).hostname;
+  const result = new Error(`SOOP 응답 시간 초과 (${host})`, { cause: error });
+  result.name = 'TimeoutError';
+  result.code = 'ETIMEDOUT';
+  result.requestHost = host;
+  return result;
+}
+
 export async function requestRaw(url, options = {}) {
   const { method = 'GET', headers: source = {}, body, cookie = '' } = options;
 
@@ -1239,12 +1287,23 @@ export async function requestRaw(url, options = {}) {
     signal = AbortSignal.timeout(15000);
   }
 
-  const res = await request(url, { signal, method, headers, body });
+  let res;
+  try {
+    res = await request(url, { signal, method, headers, body });
+  } catch (error) {
+    throw requestError(error, url, options.signal);
+  }
 
   if (!res.ok) {
     return false;
   }
 
+  try {
+    options.onResponse?.(res);
+  } catch (error) {
+    await res.body?.cancel();
+    throw error;
+  }
   return res;
 }
 
@@ -1255,7 +1314,12 @@ export async function requestText(url, options = {}) {
     return null;
   }
 
-  const text = await res.text();
+  let text;
+  try {
+    text = await res.text();
+  } catch (error) {
+    throw requestError(error, url, options.signal);
+  }
 
   if (!text) {
     return null;

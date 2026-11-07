@@ -14,7 +14,7 @@ function handlerFiles(file) {
     }
   }
   files.push(new URL('../config.js', import.meta.url));
-  for (const name of ['proxy', 'launch', 'screens', 'storage', 'usage', 'previews', 'visit', 'push', 'media']) {
+  for (const name of ['proxy', 'launch', 'screens', 'storage', 'usage', 'previews', 'visit', 'push', 'media', 'credentials', 'bans', 'recording', 'mpegts', 'cheer']) {
     files.push(new URL(`./${name}.js`, import.meta.url));
   }
   return files;
@@ -39,6 +39,7 @@ export async function watchHandler(file, state, sources = handlerFiles(file)) {
   let handler;
   let revision;
   let requested;
+  let attempt = 0;
   let closed = false;
 
   const load = async () => {
@@ -53,7 +54,7 @@ export async function watchHandler(file, state, sources = handlerFiles(file)) {
     requested = hash;
     const address = new URL(file);
 
-    address.searchParams.set('revision', hash);
+    address.searchParams.set('revision', `${hash}-${++attempt}`);
     let module;
     try {
       module = await import(address.href);
@@ -66,10 +67,13 @@ export async function watchHandler(file, state, sources = handlerFiles(file)) {
       return;
     }
 
-    const next = module.createHandler(state);
-
-    if (typeof next !== 'function') {
-      throw new Error('요청 처리 코드 오류');
+    let next;
+    try {
+      next = module.createHandler(state);
+      if (typeof next !== 'function') throw new Error('요청 처리 코드 오류');
+    } catch (error) {
+      if (requested === hash) requested = undefined;
+      throw error;
     }
 
     handler = next;

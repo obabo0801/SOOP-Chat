@@ -14,6 +14,17 @@ import * as visit from './visit.js';
 import { upStatus } from './storage.js';
 import * as push from './push.js';
 import * as media from './media.js';
+import * as bans from './bans.js';
+import * as cheer from './cheer.js';
+
+const recordingModule = new URL('./recording.js', import.meta.url);
+recordingModule.search = new URL(import.meta.url).search;
+recordingModule.searchParams.set('source', crypto.createHash('sha256').update(fs.readFileSync(recordingModule)).digest('hex'));
+const recording = await import(recordingModule.href);
+
+const credentialsModule = new URL('./credentials.js', import.meta.url);
+credentialsModule.search = new URL(import.meta.url).search;
+const credentials = await import(credentialsModule.href);
 
 const previewsModule = new URL('./previews.js', import.meta.url);
 previewsModule.search = new URL(import.meta.url).search;
@@ -53,6 +64,7 @@ const files = new Map([
   ['/index.js', ['index.js', 'text/javascript']],
   ['/device.js', ['device.js', 'text/javascript']],
   ['/broadcast.js', ['broadcast.js', 'text/javascript']],
+  ['/request.js', ['request.js', 'text/javascript']],
   ['/worker.js', ['worker.js', 'text/javascript']],
   ['/manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json']],
   ['/app.svg', ['app.svg', 'image/svg+xml']],
@@ -64,6 +76,7 @@ const files = new Map([
   ['/search.js', ['search.js', 'text/javascript']],
   ['/scroll.js', ['scroll.js', 'text/javascript']],
   ['/pip.js', ['pip.js', 'text/javascript']],
+  ['/native.js', ['native.js', 'text/javascript']],
   ['/subtitle.js', ['subtitle.js', 'text/javascript']],
   ['/quick.js', ['quick.js', 'text/javascript']],
   ['/home.js', ['home.js', 'text/javascript']],
@@ -72,6 +85,7 @@ const files = new Map([
   ['/config.js', ['../config.js', 'text/javascript']],
   ['/style.css', ['style.css', 'text/css']],
   ['/chat.js', ['chat.js', 'text/javascript']],
+  ['/cheering.js', ['cheering.js', 'text/javascript']],
   ['/chat.css', ['chat.css', 'text/css']],
   ['/favicon.png', ['favicon.png', 'image/png']],
   ['/ntfy.png', ['ntfy.png', 'image/png']],
@@ -81,6 +95,10 @@ const files = new Map([
 ]);
 
 const shortcuts = ['!멤버', '!일정'];
+
+if (fs.existsSync(new URL('./android.apk', import.meta.url))) {
+  files.set('/android.apk', ['android.apk', 'application/vnd.android.package-archive']);
+}
 
 function shortcut(config, command) {
   return config.rules.findIndex(rule =>
@@ -209,6 +227,8 @@ export function createHandler(state) {
   state.root ??= !state.stop;
   const { macro, account, allowed, chat, video, pages, key, origins } = state;
   state.videoEnabled ??= true;
+  state.recordingEnabled ??= false;
+  state.recordingController ??= recording.create(state);
   state.videoStart ??= video.start;
   video.start = () => state.videoEnabled ? state.videoStart() : Promise.resolve();
   const delivery = media.createMedia(state);
@@ -225,11 +245,15 @@ export function createHandler(state) {
     Object.defineProperties(target, descriptors);
   };
   upgrade(macro.client, SoopClient);
+  if (macro.client.viewer) upgrade(macro.client.viewer, SoopClient);
   if (macro.client.network) upgrade(macro.client.network, Network);
   if (macro.client.bridge) upgrade(macro.client.bridge, Bridge);
   if (macro.client.package) upgrade(macro.client.package, SoopPackage);
   if (macro.history) upgrade(macro.history, SoopHistory);
   upgrade(chat, Chat);
+  state.cheer ??= new cheer.Cheer(state);
+  upgrade(state.cheer, cheer.Cheer);
+  chat.watchEvents();
   chat.watchViewer();
   if (chat.state().connected) {
     void chat.kicks().catch(() => {});
@@ -282,17 +306,19 @@ export function createHandler(state) {
   };
   remember();
   state.logins ||= new Map();
-  const authenticate = async (login, options) => {
+  const authenticate = async (login, options, save = true) => {
     for (const [key, value] of state.logins) {
       if (value.expires <= Date.now()) state.logins.delete(key);
     }
-    let result, id, firstCookie;
+    let result, id, firstCookie, password, second;
     if (login?.challenge) {
       const pending = state.logins.get(login.challenge);
       if (!pending || typeof login.second !== 'string' || !login.second) {
         throw new Error('로그인을 다시 진행해주세요.');
       }
       id = pending.id;
+      password = pending.password;
+      second = login.second;
       firstCookie = pending.cookie;
       result = await api.secondLogin(id, login.second, { ...options, cookie: firstCookie });
       if (result?.data?.RESULT !== 1) {
@@ -307,17 +333,18 @@ export function createHandler(state) {
         throw new Error('아이디와 비밀번호를 입력해주세요.');
       }
       id = id.trim();
-      result = await api.login(id, login.password, options);
+      password = login.password;
+      second = login.second || login.secondPw || '';
+      result = await api.login(id, login.password, { ...options, cookie: undefined });
       if (result?.data?.RESULT === -11) {
         firstCookie = result.cookie;
-        const second = login.second || login.secondPw;
         if (second) {
           result = await api.secondLogin(id, second, { ...options, cookie: firstCookie });
         }
         else {
           const challenge = crypto.randomBytes(32).toString('hex');
           if (state.logins.size >= 32) state.logins.delete(state.logins.keys().next().value);
-          state.logins.set(challenge, { id, cookie: firstCookie, expires: Date.now() + 180000, attempts: 0 });
+          state.logins.set(challenge, { id, password, cookie: firstCookie, expires: Date.now() + 180000, attempts: 0 });
           return { second: true, challenge };
         }
       }
@@ -328,15 +355,65 @@ export function createHandler(state) {
     const cookie = { ...firstCookie, ...result.cookie };
     const info = await api.getPrivateInfo({ ...options, cookie });
     if (info?.IS_LOGIN !== 1) throw new Error('로그인 상태를 확인할 수 없습니다.');
+    if (info.LOGIN_ID?.toLowerCase() !== id.toLowerCase()) throw new Error('로그인 계정을 확인해주세요.');
+    if (save) credentials.accounts.save(id, { password, second });
     return { cookie, info };
   };
+  const savedLogin = id => {
+    const stored = credentials.accounts.load(id);
+    const configured = configuredAccount.userId === id ? configuredAccount : null;
+    const password = stored?.password || configured?.password;
+    return password ? { userId: id, password, second: stored?.second || configured?.secondPw || '' } : null;
+  };
   const client = macro.client;
+  client.reauthenticate = async () => {
+    const cookie = client.cookie;
+    const id = client.info?.LOGIN_ID || [...state.accounts.values()]
+      .find(value => api.cookieString(value.cookie) === api.cookieString(cookie))?.id;
+    if (!id || client.closed || client.signedout) return false;
+    const login = savedLogin(id);
+    if (!login) {
+      client.loginError = '자동 로그인을 사용하려면 한 번 다시 로그인해주세요.';
+      return false;
+    }
+    const result = await authenticate(login, client.network.httpOptions, false);
+    if (result.second) throw new Error('2차 비밀번호를 입력해 다시 로그인해주세요.');
+    if (client.closed || client.signedout || client.cookie !== cookie) return false;
+    credentials.accounts.save(id, { password: login.password, second: login.second });
+    client.cookie = result.cookie;
+    client.info = result.info;
+    client.loginExpired = false;
+    client.loginError = '';
+    state.cookie = null;
+    state.attempted = undefined;
+    remember();
+    state.screens?.publish();
+    return true;
+  };
+  if (client.loginExpired && !client.loginError && !client.renewal) {
+    void client.safe(async () => {
+      if (await client.recoverLogin() && !client.isOpen()) {
+        client.waiting = true;
+        await client.connect();
+      }
+    });
+  }
   if (client.cookie && !client.signedout && !client.info) {
     const cookie = api.cookieString(client.cookie);
     const saved = [...state.accounts.values()].find(value => api.cookieString(value.cookie) === cookie);
     const restore = info => {
       if (api.cookieString(client.cookie) !== cookie || client.signedout || client.info) return;
       if (info?.IS_LOGIN === 1) client.info = info;
+      else if (saved?.id) {
+        client.info = { IS_LOGIN: 0, LOGIN_ID: saved.id, LOGIN_NICK: saved.name || saved.id };
+        client.loginExpired = true;
+        void client.safe(async () => {
+          if (await client.recoverLogin() && !client.isOpen()) {
+            client.waiting = true;
+            await client.connect();
+          }
+        });
+      }
       else {
         client.cookie = undefined;
         client.info = null;
@@ -356,6 +433,10 @@ export function createHandler(state) {
     }
   }
   if (state.screens) {
+    chat.scope = String(new URL(state.origin).port);
+    if (macro.client.connecting || macro.client.waiting || macro.client.scheduled > Date.now()) {
+      macro.client.startViewer();
+    }
     state.screens.close();
     state.screens = createScreens(state);
   }
@@ -432,9 +513,10 @@ export function createHandler(state) {
       api.getSignature(bjId, options),
       api.getStatus(bjId, options),
       api.getDashboard(bjId, options),
-      api.getUpStatus(bjId, macro.client.channel?.BNO, options)
+      api.getUpStatus(bjId, macro.client.channel?.BNO, options),
+      api.getPersonalcon(bjId, options)
     ])
-      .then(([station, ogq, emoticon, signature, status, dashboard, up]) => {
+      .then(([station, ogq, emoticon, signature, status, dashboard, up, personalcon]) => {
         if (
           macro.closed
           || macro.client.bjId !== bjId
@@ -463,6 +545,10 @@ export function createHandler(state) {
           state.profile.dashboard = dashboard.value;
         }
 
+        if (personalcon.status === 'fulfilled') {
+          macro.client.personalcon = { bjId, data: personalcon.value };
+        }
+
         if (ogq.status === 'fulfilled' && Array.isArray(ogq.value?.data)) {
           macro.client.ogq = ogq.value;
         }
@@ -484,11 +570,24 @@ export function createHandler(state) {
     return state.assets;
   };
 
-  const reset = async (cookie, info) => {
-    const client = macro.client;
-    if ((await control.multiStatus(client)).running) {
+  const stopMulti = async () => {
+    if (!(await control.multiStatus(client)).running) return;
+    try {
       await control.stopMulti(client);
+    } catch (error) {
+      try {
+        if (!(await control.multiStatus(client)).running) return;
+      } catch {}
+      throw error;
     }
+  };
+
+  const reset = async (cookie, info, ending = false) => {
+    state.cheer.stop('연결이 변경되어 정지했습니다.');
+    const client = macro.client;
+    if (ending) await stopMulti().catch(() => {});
+    else await stopMulti();
+    await state.recordingController?.finish();
     await video.reset();
     macro.generation++;
 
@@ -525,10 +624,14 @@ export function createHandler(state) {
 
   if (state.broadcastEnd) client.off('broadcastEnd', state.broadcastEnd);
   state.broadcastEnd = () => {
-    if (client.auto || state.switching) return;
+    if (client.auto) {
+      void stopMulti().catch(() => {});
+      return;
+    }
+    if (state.switching) return;
     state.switching = true;
     void Promise.resolve().then(async () => {
-      await reset(client.cookie, client.info);
+      await reset(client.cookie, client.info, true);
       client.bjId = '';
       macro.select();
       state.screens?.list();
@@ -543,7 +646,8 @@ export function createHandler(state) {
   return (request, response) => {
     const day = String(Math.floor((Date.now() + 9 * 3600000) / 86400000));
     const signature = crypto.createHmac('sha256', state.accessHash).update(day).digest('hex');
-    const verified = !state.accessPassword || request.headers.cookie?.split(';').some(value => {
+    const access = value => {
+      if (typeof value !== 'string') return false;
       const cookie = value.trim();
       if (!cookie.startsWith('soop-access=')) return false;
       const stamp = cookie.slice('soop-access='.length).split('.')[0];
@@ -554,7 +658,9 @@ export function createHandler(state) {
       const expected = `soop-access=${stamp}.${hash}`;
       return Buffer.byteLength(cookie) === Buffer.byteLength(expected)
         && crypto.timingSafeEqual(Buffer.from(cookie), Buffer.from(expected));
-    });
+    };
+    const directAccess = access(`soop-access=${request.headers['x-soop-access'] || ''}`);
+    const verified = !state.accessPassword || directAccess || request.headers.cookie?.split(';').some(access);
     const home = Number(new URL(state.origin).port) === state.range?.start
       && (!request.headers['x-soop-screen'] || request.headers['x-soop-screen'] === '0');
     const password = home ? state.accessPassword : state.password;
@@ -563,7 +669,7 @@ export function createHandler(state) {
     const token = home ? state.accessToken : state.token;
 
     const address = new URL(request.url, state.origin);
-    const direct = Boolean(process.env.WEBORIGIN
+    const direct = directAccess || Boolean(process.env.WEBORIGIN
       && visit.visitDetails(request).address.startsWith(`${new URL(process.env.WEBORIGIN).origin}/`));
     if (address.pathname === '/api/editor') void visit.notifyVisit(request, false).catch(() => {});
     if (verified && state.accessPassword) {
@@ -583,11 +689,12 @@ export function createHandler(state) {
     }
     const pathname = address.pathname.replace(/^\/\d+(?=\/)/, '');
     const signed = delivery.verify(address);
-    if ((pathname.startsWith('/media/') || pathname === '/api/chat') && address.pathname !== pathname
+    if ((pathname.startsWith('/media/') || pathname.startsWith('/api/')) && address.pathname !== pathname
       && proxyScreen(request, response, state)) return;
     const directChat = pathname === '/api/chat' && (request.method === 'OPTIONS'
       || request.headers.authorization === `Bearer ${token}`);
-    if (!verified && !signed && !directChat && (pathname.startsWith('/media/') || pathname.startsWith('/api/')
+    const preflight = request.method === 'OPTIONS' && pathname.startsWith('/api/');
+    if (!verified && !signed && !directChat && !preflight && (pathname.startsWith('/media/') || pathname.startsWith('/api/')
       && !['/api/gate', '/api/entry', '/api/access'].includes(pathname))) {
       reply(response, 401, { error: '접속 비밀번호를 확인해주세요.' });
       return;
@@ -637,12 +744,16 @@ export function createHandler(state) {
           return;
         }
 
-        const chatRequest = /^\/api\/chat(?:\?|$)/.test(request.url);
-        if ((request.url.startsWith('/media/') || chatRequest) && request.method === 'OPTIONS') {
+        const apiRequest = request.url.startsWith('/api/');
+        if (apiRequest && request.headers.origin) {
+          response.setHeader('Access-Control-Allow-Origin', request.headers.origin);
+          response.setHeader('Vary', 'Origin');
+        }
+        if ((request.url.startsWith('/media/') || apiRequest) && request.method === 'OPTIONS') {
           response.writeHead(204, {
             'Access-Control-Allow-Origin': request.headers.origin || state.origin,
-            'Access-Control-Allow-Methods': chatRequest ? 'GET, POST, OPTIONS' : 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': chatRequest ? 'Authorization, Content-Type' : 'Range',
+            'Access-Control-Allow-Methods': apiRequest ? 'GET, POST, PUT, DELETE, OPTIONS' : 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': apiRequest ? 'Authorization, Content-Type, X-Soop-Access' : 'Range',
             Vary: 'Origin'
           });
           response.end();
@@ -865,6 +976,7 @@ export function createHandler(state) {
           '/api/stream',
           '/api/preview',
           '/api/chat',
+          '/api/cheer',
           '/api/multi',
           '/api/notify',
           '/api/push',
@@ -877,7 +989,8 @@ export function createHandler(state) {
           '/api/roulette',
           '/api/poll',
           '/api/reaction',
-          '/api/user'
+          '/api/user',
+          '/api/bans'
         ];
 
         if (!routes.includes(address.pathname)) {
@@ -1009,6 +1122,7 @@ export function createHandler(state) {
               chat.broadcast('state', chat.state());
             }
             state.accounts.delete(data.id);
+            credentials.accounts.remove(data.id);
             state.screens?.list();
             reply(response, 200, {});
           } finally { state.signing = false; }
@@ -1111,7 +1225,8 @@ export function createHandler(state) {
 
               cookie = selected.cookie;
               info = selected.info;
-              login = !cookie && selected.configured ? account?.() : null;
+              login = !cookie ? savedLogin(selected.id) : null;
+              if (!cookie && !login) throw new Error('저장된 계정에 다시 로그인해주세요.');
             }
 
             if (data.account === 'guest') {
@@ -1140,10 +1255,16 @@ export function createHandler(state) {
               info = result.info;
             }
             else if (cookie && info?.IS_LOGIN !== 1) {
+              const id = data.identity || info?.LOGIN_ID || client.info?.LOGIN_ID;
               info = await api.getPrivateInfo({ ...options, cookie });
 
               if (info?.IS_LOGIN !== 1) {
-                throw new Error('로그인이 만료되었습니다. 새 계정으로 로그인해주세요.');
+                const stored = id && savedLogin(id);
+                if (!stored) throw new Error('저장된 계정에 다시 로그인해주세요.');
+                const result = await authenticate(stored, options);
+                if (result.second) throw new Error('2차 비밀번호를 입력해 다시 로그인해주세요.');
+                cookie = result.cookie;
+                info = result.info;
               }
             }
 
@@ -1305,9 +1426,18 @@ export function createHandler(state) {
               throw new Error('게시판 목록을 불러오지 못했습니다');
             }
 
-            entries = data.contents.filter(item => !item.ucc).map(item => ({
+            const notices = Array.isArray(data.noticeData) ? data.noticeData : [];
+            const pinned = new Set(notices.map(item => String(item.titleNo)));
+            const seen = page === 1 ? new Set() : new Set(pinned);
+            entries = [...(page === 1 ? notices : []), ...data.contents].filter(item => {
+              const key = String(item.titleNo || '');
+              if (!key || item.ucc || seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            }).map(item => ({
               id: item.titleNo,
               title: item.titleName,
+              notice: pinned.has(String(item.titleNo)),
               author: item.userNick,
               date: item.regDate,
               views: item.count?.readCnt ?? 0
@@ -1335,6 +1465,7 @@ export function createHandler(state) {
             return;
           }
 
+          if (!address.searchParams.get('cursor')) await chat.refreshMembers();
           const data = chat.members(
             address.searchParams.get('query') || '',
             address.searchParams.get('cursor') || ''
@@ -1580,9 +1711,10 @@ export function createHandler(state) {
             data.items = data.items.map(item => {
               const repair = repairs.find(value => value.id === item.id);
               if (repair) item = { ...item, ...repair, image: '' };
-              return { ...item,
-              user: { ...chat.user({ userId: item.userId, userNick: item.nickname }),
-                ...Object.fromEntries(Object.entries(item.user || {}).filter(([, value]) => value != null)) } };
+              return { ...item, user: { ...item.user, ...chat.user({
+                ...Object.fromEntries(Object.entries(item.user || {}).filter(([, value]) => value != null)),
+                userId: item.userId, userNick: item.nickname
+              }) } };
             });
             return data;
           };
@@ -1734,7 +1866,7 @@ export function createHandler(state) {
               reply(response, 200, await control.startMulti(data.count, macro.client));
             }
             else if (data.action === 'stop') {
-              await control.stopMulti(macro.client);
+              await stopMulti();
               reply(response, 200, { running: false, rows: [] });
             }
             else {
@@ -1745,6 +1877,31 @@ export function createHandler(state) {
             reply(response, 405, { error: '요청 오류' });
           }
 
+          return;
+        }
+
+        if (address.pathname === '/api/cheer') {
+          const controller = state.cheer;
+          controller.status();
+          if (request.method === 'POST') {
+            const data = await body(request);
+            const scope = controller.scope();
+            if (data.player !== scope.player || data.account !== scope.account || state.switching) {
+              throw new Error('방송이나 로그인 계정이 변경되었습니다.');
+            }
+            if (data.action === 'stop') controller.stop();
+            else if (data.action === 'start') controller.start(data.config, data.revision);
+            else if (data.action === 'save') {
+              if (controller.running) throw new Error('응원봉을 먼저 정지해주세요.');
+              controller.save(data.config, data.revision);
+            }
+            else throw new Error('응원봉 요청을 확인해주세요.');
+          }
+          else if (request.method !== 'GET') {
+            reply(response, 405, { error: '요청 오류' });
+            return;
+          }
+          reply(response, 200, { ...controller.status(), ...controller.read() });
           return;
         }
 
@@ -1764,7 +1921,9 @@ export function createHandler(state) {
                 address.searchParams.get('type') || ''
               );
 
-              reply(response, 200, { ...data, state: chat.state() });
+              const count = address.searchParams.get('month') === '1' && address.searchParams.get('user')
+                ? await chat.monthly(address.searchParams.get('user')) : undefined;
+              reply(response, 200, { ...data, count, state: chat.state() });
             }
           }
           else if (request.method === 'POST') {
@@ -1857,8 +2016,11 @@ export function createHandler(state) {
             }
 
             if (data.action === 'login') {
-              if (client.info?.IS_LOGIN === 1) {
-                throw new Error('이미 로그인되어 있습니다.');
+              if (client.info?.IS_LOGIN === 1 && !client.loginExpired) {
+                const id = data.id || state.logins.get(data.challenge)?.id;
+                if (id?.toLowerCase() !== client.info.LOGIN_ID?.toLowerCase()) {
+                  throw new Error('선택한 계정으로 로그인해주세요.');
+                }
               }
 
               const result = await authenticate(data, { ...client.network.httpOptions, cookie: client.cookie });
@@ -1868,6 +2030,8 @@ export function createHandler(state) {
               }
               client.cookie = result.cookie;
               client.info = result.info;
+              client.loginExpired = false;
+              client.loginError = '';
               await client.loadBasics();
               client.signedout = false;
               remember();
@@ -1894,6 +2058,7 @@ export function createHandler(state) {
               state.attempted = undefined;
               await client.logout();
               state.accounts.delete(id);
+              if (id) credentials.accounts.remove(id);
               state.screens?.list();
             }
             else {
@@ -1929,17 +2094,35 @@ export function createHandler(state) {
             return;
           }
           const data = await body(request);
-          const result = await api.postReaction(client.bjId, client.channel?.BNO, data.action,
+          const bjId = client.bjId;
+          const account = client.info.LOGIN_ID;
+          if (data.player && data.player !== bjId) throw new Error('방송 연결이 변경되었습니다.');
+          const previous = state.profile?.id === bjId ? state.profile : null;
+          const field = data.action === 'favorite' ? 'fan_cnt' : 'today_ok_cnt';
+          const count = Number(previous?.status?.[field]);
+          const active = previous?.[data.action];
+          const result = await api.postReaction(bjId, client.channel?.BNO, data.action,
             { ...client.network?.httpOptions, cookie: client.cookie, active: data.active });
+          if (client.bjId !== bjId || client.info?.LOGIN_ID !== account) throw new Error('방송 연결이 변경되었습니다.');
+          if (Number.isFinite(count)) {
+            const delta = data.action === 'up' ? result.changed === true ? 1 : 0
+              : active === result.active ? 0 : result.active ? 1 : -1;
+            result.count = Math.max(0, count + delta);
+            if (state.profile?.id === bjId && state.profile.status) state.profile.status[field] = result.count;
+          }
           if (data.action === 'favorite') {
             if (state.profile?.id === client.bjId) state.profile.favorite = result.active;
-            state.loaded = 0;
           }
           else if (data.action === 'up' && state.profile?.id === client.bjId) {
             state.profile.up = result.active;
           }
           if (data.action === 'up' && result.active) upStatus(client.info?.LOGIN_ID, client.bjId, true);
           reply(response, 200, result);
+          return;
+        }
+
+        if (address.pathname === '/api/bans' && request.method === 'GET') {
+          reply(response, 200, await bans.get(address.searchParams.get('id'), Number(address.searchParams.get('cursor') || 0)));
           return;
         }
 
@@ -1951,6 +2134,9 @@ export function createHandler(state) {
           }
 
           const station = id.replace(/\(\d+\)$/, '');
+          const saved = state.screenIdentity;
+          const viewer = !macro.client.isOpen?.() && saved?.id === station && saved.bjId === macro.client.bjId
+            ? { ...chat.user({ userId: id }), ...saved.user, id } : chat.user({ userId: id });
           const data = await api.getStation(station, {
             ...macro.client.network?.httpOptions,
             signal: AbortSignal.timeout(5000)
@@ -1978,7 +2164,7 @@ export function createHandler(state) {
             reply(response, 200, {
               image: data?.profile_image || '',
               profile: detail,
-              user: chat.user({ userId: id })
+              user: viewer
             });
           }
           else {
@@ -1988,7 +2174,7 @@ export function createHandler(state) {
             reply(response, 200, {
               image: data?.profile_image || '',
               emblem,
-              user: chat.user({ userId: id })
+              user: viewer
             });
           }
 
@@ -2021,7 +2207,10 @@ export function createHandler(state) {
             try {
               state.videoEnabled = data.enabled;
               if (data.enabled) await video.start();
-              else await video.reset();
+              else {
+                await state.recordingController?.finish();
+                await video.reset();
+              }
               state.screens.publish();
               reply(response, 200, { enabled: state.videoEnabled });
             } finally {
@@ -2045,7 +2234,25 @@ export function createHandler(state) {
             reply(response, 200, { enabled: state.videoEnabled, state: 'disabled', url: '', download: '', qualities: [] });
             return;
           }
-          const data = await video.open(quality);
+          const current = video.snapshot();
+          if (state.videoFallback?.url !== current.url) state.videoFallback = null;
+          let selected = quality;
+          if (quality) {
+            if (address.searchParams.get('temporary') === '1' && current.quality && current.url) {
+              state.videoFallback = {
+                url: current.url,
+                quality: state.videoFallback?.quality || current.quality,
+                until: Date.now() + 60000
+              };
+            } else state.videoFallback = null;
+          } else if (state.videoFallback && Date.now() >= state.videoFallback.until
+            && current.qualities.some(item => item.name === state.videoFallback.quality && !item.disabled)) {
+            selected = state.videoFallback.quality;
+          }
+          const data = await video.open(selected);
+          if (state.videoFallback && selected === state.videoFallback.quality && data.quality === selected) {
+            state.videoFallback = null;
+          }
 
           if (!state.videoEnabled) {
             reply(response, 200, { enabled: false, state: 'disabled', url: '', download: '', qualities: [] });
@@ -2078,7 +2285,26 @@ export function createHandler(state) {
             return;
           }
 
-          if (typeof data.enabled === 'boolean' && !data.config) {
+          if (Object.hasOwn(data, 'recording') && !data.config) {
+            if (typeof data.recording !== 'boolean' || !macro.client.bjId) throw new Error('자동 녹화 설정 오류');
+            if (state.recordingEnabled !== data.recording) {
+              await state.recordingController.close();
+              state.recordingEnabled = data.recording;
+              state.recordingController = recording.create(state);
+            }
+            await state.recordingController.flush();
+            state.screens?.list();
+          }
+          else if (Object.hasOwn(data, 'auto') && !data.config) {
+            if (typeof data.auto !== 'boolean' || !macro.client.bjId) {
+              throw new Error('자동 연결 설정 오류');
+            }
+            macro.client.auto = data.auto;
+            if (data.auto) macro.client.startLive();
+            else macro.client.stopLive();
+            state.screens?.list();
+          }
+          else if (typeof data.enabled === 'boolean' && !data.config) {
             macro.setEnabled(data.enabled);
           }
           else {
@@ -2100,13 +2326,22 @@ export function createHandler(state) {
         const inbox = macro.client.notify?.inbox();
         const current = state.profile?.id === macro.client.bjId ? state.profile : null;
         const viewers = chat.state().viewers ?? current?.broad?.current_sum_viewer ?? 0;
+        const stamp = `t${Date.now()}`;
+        const grant = crypto.createHmac('sha256', state.accessHash).update(stamp).digest('hex');
 
         reply(response, 200, {
           ...data,
           origins,
           chat: direct ? delivery.chat() : '',
+          connection: direct && delivery.origin ? {
+            url: delivery.api(home),
+            access: `${stamp}.${grant}`
+          } : undefined,
           player: macro.client.bjId || '',
+          auto: Boolean(macro.client.auto),
+          recording: Boolean(state.recordingEnabled),
           homeAccount: macro.client.info?.IS_LOGIN === 1 ? macro.client.info.LOGIN_ID || 'login' : '',
+          cheer: state.cheer.status(),
           sessionReady: state.sessionReady,
           fixed: Boolean(state.fixed),
           notification: macro.client.notify?.settings(),
@@ -2125,6 +2360,11 @@ export function createHandler(state) {
             categories: macro.client.channel?.CATEGORY_TAGS || []
           },
           restricted: {
+            loginStored: credentials.accounts.has(macro.client.info?.LOGIN_ID)
+              || Boolean(configuredAccount.userId === macro.client.info?.LOGIN_ID && configuredAccount.password),
+            loginExpired: Boolean(macro.client.loginExpired),
+            loginRecovering: Boolean(macro.client.renewal),
+            loginError: macro.client.loginError || '',
             password: macro.client.channel?.BPWD === 'Y',
             passwordRequired: macro.client.channel?.BPWD === 'Y' && !macro.client.broadPw && !macro.client.isOpen(),
             adult: Number(macro.client.channel?.GRADE) >= 19
